@@ -1,0 +1,59 @@
+{
+  "latest_ckpt": {
+    "voxelnet": "voxelnet-74280.tckpt",
+    "adam_optimizer": "adam_optimizer-51968.tckpt",
+    "fusion_layer": "fusion_layer-51968.tckpt"
+  },
+  "all_ckpts": {
+    "voxelnet": [
+      "voxelnet-49520.tckpt",
+      "voxelnet-52615.tckpt",
+      "voxelnet-52884.tckpt",
+      "voxelnet-55710.tckpt",
+      "voxelnet-58194.tckpt",
+      "voxelnet-58805.tckpt",
+      "voxelnet-61900.tckpt",
+      "voxelnet-63335.tckpt",
+      "voxelnet-64995.tckpt",
+      "voxelnet-68090.tckpt",
+      "voxelnet-68312.tckpt",
+      "voxelnet-71185.tckpt",
+      "voxelnet-73461.tckpt",
+      "voxelnet-74280.tckpt"
+    ],
+    "adam_optimizer": [
+      "adam_optimizer-3712.tckpt",
+      "adam_optimizer-7424.tckpt",
+      "adam_optimizer-11136.tckpt",
+      "adam_optimizer-14848.tckpt",
+      "adam_optimizer-18560.tckpt",
+      "adam_optimizer-22272.tckpt",
+      "adam_optimizer-25984.tckpt",
+      "adam_optimizer-29696.tckpt",
+      "adam_optimizer-30978.tckpt",
+      "adam_optimizer-33408.tckpt",
+      "adam_optimizer-37120.tckpt",
+      "adam_optimizer-40832.tckpt",
+      "adam_optimizer-44544.tckpt",
+      "adam_optimizer-48256.tckpt",
+      "adam_optimizer-51968.tckpt"
+    ],
+    "fusion_layer": [
+      "fusion_layer-3712.tckpt",
+      "fusion_layer-7424.tckpt",
+      "fusion_layer-11136.tckpt",
+      "fusion_layer-14848.tckpt",
+      "fusion_layer-18560.tckpt",
+      "fusion_layer-22272.tckpt",
+      "fusion_layer-25984.tckpt",
+      "fusion_layer-29696.tckpt",
+      "fusion_layer-30978.tckpt",
+      "fusion_layer-33408.tckpt",
+      "fusion_layer-37120.tckpt",
+      "fusion_layer-40832.tckpt",
+      "fusion_layer-44544.tckpt",
+      "fusion_layer-48256.tckpt",
+      "fusion_layer-51968.tckpt"
+    ]
+  }
+}

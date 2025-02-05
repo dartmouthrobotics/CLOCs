@@ -1,0 +1,1789 @@
+model: {
+  second: {
+    voxel_generator {
+      point_cloud_range : [0, -40, -3, 70.4, 40, 1]
+      #point_cloud_range: [0, -96.0, -20, 96.0, 96.0, 20]
+      # point_cloud_range : [0, -32.0, -3, 52.8, 32.0, 1]
+      #voxel_size : [0.2, 0.2, 1.0]   # original is 0.05,0.05,0.1
+      voxel_size : [0.05, 0.05, 0.1]   # original is 0.05,0.05,0.1
+      max_number_of_points_per_voxel : 5   # original is 5
+    }
+
+    voxel_feature_extractor: {
+      module_class_name: "VoxelFeatureExtractorV3"
+      num_filters: [16]
+      with_distance: false
+      num_input_features: 4
+    }
+    middle_feature_extractor: {
+      module_class_name: "SpMiddleFHD"
+      # num_filters_down1: [] # protobuf don't support empty list.
+      # num_filters_down2: []
+      downsample_factor: 8
+      num_input_features: 4
+    }
+    rpn: {
+      module_class_name: "RPNV2"
+      layer_nums: [5, 5]
+      layer_strides: [1, 2]
+      num_filters: [128, 256]
+      upsample_strides: [1, 2]
+      num_upsample_filters: [256, 256]
+      use_groupnorm: false
+      num_groups: 32
+      num_input_features: 128
+    }
+    loss: {
+      classification_loss: {
+        weighted_sigmoid_focal: {
+          alpha: 0.25
+          gamma: 2.0
+          anchorwise_output: true
+        }
+      }
+      localization_loss: {
+        weighted_smooth_l1: {
+          sigma: 3.0
+          code_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        }
+      }
+      classification_weight: 1.0   #original 1.0
+      localization_weight: 2.0
+    }
+    # Outputs
+    use_sigmoid_score: true
+    encode_background_as_zeros: true
+    encode_rad_error_by_sin: true
+
+    use_direction_classifier: true # this can help for orientation benchmark
+    direction_loss_weight: 0.2 # enough.
+    use_aux_classifier: false
+    # Loss
+    pos_class_weight: 1.0
+    neg_class_weight: 1.0
+
+    loss_norm_type: NormByNumPositives
+    # Postprocess
+    #post_center_limit_range: [0, -96.0, -20, 96.0, 96.0, 0]
+    post_center_limit_range: [0, -40, -3.0, 70.4, 40, 0.0]
+    use_rotate_nms: true
+    use_multi_class_nms: false
+    nms_pre_max_size: 1000
+    nms_post_max_size: 100
+    nms_score_threshold: 0.2 # 0.2 MJ
+    nms_iou_threshold: 0.01
+
+    use_bev: false
+    num_point_features: 4
+    without_reflectivity: false
+    box_coder: {
+      ground_box3d_coder: {
+        linear_dim: false
+        encode_angle_vector: false
+      }
+    }
+    target_assigner: {
+      anchor_generators: {
+        anchor_generator_range: {
+          sizes: [1.6, 3.9, 1.56] # wlh
+          anchor_ranges: [0, -40.0, -1.78, 70.4, 40.0, -1.78] # carefully set z center, the original one is -1.78
+          rotations: [0, 1.57] # DON'T modify this unless you are very familiar with my code.
+          matched_threshold : 0.6
+          unmatched_threshold : 0.45
+          class_name: "Car"
+        }
+      }
+      sample_positive_fraction : -1
+      sample_size : 512
+      region_similarity_calculator: {
+        nearest_iou_similarity: {
+        }
+      }
+    }
+  }
+}
+
+
+train_input_reader: {
+  max_num_epochs : 160
+  batch_size: 1 # 1
+  prefetch_size : 25
+  max_number_of_voxels: 16000 # to support batchsize=2 in 1080Ti, original 16000
+  shuffle_points: true
+  num_workers: 3
+  groundtruth_localization_noise_std: [1.0, 1.0, 0.5]
+  # groundtruth_rotation_uniform_noise: [-0.3141592654, 0.3141592654]
+  # groundtruth_rotation_uniform_noise: [-1.57, 1.57]
+  groundtruth_rotation_uniform_noise: [-0.78539816, 0.78539816]
+  global_rotation_uniform_noise: [-0.78539816, 0.78539816]
+  global_scaling_uniform_noise: [0.95, 1.05]
+  global_random_rotation_range_per_object: [0, 0] # pi/4 ~ 3pi/4
+  anchor_area_threshold: -1
+  remove_points_after_sample: true
+  groundtruth_points_drop_percentage: 0.0
+  groundtruth_drop_max_keep_points: 15
+  database_sampler {
+    database_info_path: "/home/mingi/perception_ws/CLOCs-kitti-original-mod/data/kitti/kitti_dbinfos_train.pkl"
+    sample_groups {
+      name_to_max_num {
+        key: "Car"
+        value: 15
+      }
+    }
+    database_prep_steps {
+      filter_by_min_num_points {
+        min_num_point_pairs {
+          key: "Car"
+          value: 5
+        }
+      }
+    }
+    database_prep_steps {
+      filter_by_difficulty {
+        removed_difficulties: [-1]
+      }
+    }
+    global_random_rotation_range_per_object: [0, 0]
+    rate: 1.0
+  }
+
+  remove_unknown_examples: false
+  remove_environment: false
+  kitti_info_path: "/home/mingi/perception_ws/CLOCs-kitti-original-mod/data/kitti/kitti_infos_train.pkl"
+  kitti_root_path: "/home/mingi/perception_ws/CLOCs-kitti-original-mod/data/kitti"
+}
+
+train_config: {
+  optimizer: {
+    adam_optimizer: {
+      learning_rate: {
+        one_cycle: {
+          lr_max: 3e-3  # original 3e-3
+          moms: [0.95, 0.85]
+          div_factor: 10.0  #original 10
+          pct_start: 0.4
+        }
+      }
+      weight_decay: 0.01 # super converge. decrease this when you increase steps. og 0.01
+    }
+    fixed_weight_decay: true
+    use_moving_average: false
+  }
+  steps: 111360 #112215 #113715 #111360 # 619 * 50, super converge. increase this to achieve slightly better results original 30950
+  steps_per_eval: 3712 #7481 # 619 * 5
+  save_checkpoints_secs : 1800 # half hour 1800
+  save_summary_steps : 10
+  enable_mixed_precision: false # for fp16 training, don't use this.
+  loss_scale_factor : 512.0
+  clear_metrics_every_epoch: true
+  detection_2d_path: "../d2_detection_data"
+}
+
+eval_input_reader: {
+  batch_size: 1 # 1
+  max_num_epochs : 160
+  prefetch_size : 25
+  max_number_of_voxels: 40000 # 16000
+  shuffle_points: false
+  num_workers: 3
+  anchor_area_threshold: -1
+  remove_environment: false
+  kitti_info_path: "/home/mingi/perception_ws/CLOCs-kitti-original-mod/data/kitti/kitti_infos_val.pkl"
+  #kitti_info_path: "/home/mingi/perception_ws/CLOCs-kitti-original/data/kitti/kitti_infos_test.pkl"
+  kitti_root_path: "/home/mingi/perception_ws/CLOCs-kitti-original-mod/data/kitti"
+}
+
+now it is 50 steps  and the cls_loss is : tensor(3155.7205, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003000080641256029
+now it is 100 steps  and the cls_loss is : tensor(972.5880, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030003291001902237
+now it is 150 steps  and the cls_loss is : tensor(477.3248, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003000745433365624
+now it is 200 steps  and the cls_loss is : tensor(426.2329, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003001329635604938
+now it is 250 steps  and the cls_loss is : tensor(191.0066, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030020816996433703
+now it is 300 steps  and the cls_loss is : tensor(126.7183, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003003001616128675
+now it is 350 steps  and the cls_loss is : tensor(68.1454, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030040893736212916
+now it is 400 steps  and the cls_loss is : tensor(35.1591, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003005344958594484
+now it is 450 steps  and the cls_loss is : tensor(18.2730, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003006768355434523
+now it is 500 steps  and the cls_loss is : tensor(11.8336, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030083595464408357
+now it is 550 steps  and the cls_loss is : tensor(7.0199, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003010118511826286
+now it is 600 steps  and the cls_loss is : tensor(4.5029, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030120452297173776
+now it is 650 steps  and the cls_loss is : tensor(2.4628, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003014139676154543
+now it is 700 steps  and the cls_loss is : tensor(1.8761, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003016401825092427
+now it is 750 steps  and the cls_loss is : tensor(1.2433, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030188316484002463
+now it is 800 steps  and the cls_loss is : tensor(0.9289, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030214291158620803
+now it is 850 steps  and the cls_loss is : tensor(0.6428, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030241941951773127
+now it is 900 steps  and the cls_loss is : tensor(0.5241, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030271268519609833
+now it is 950 steps  and the cls_loss is : tensor(0.4393, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030302270497442347
+now it is 1000 steps  and the cls_loss is : tensor(0.4117, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003033494749974772
+now it is 1050 steps  and the cls_loss is : tensor(0.2894, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030369299120173304
+now it is 1100 steps  and the cls_loss is : tensor(0.2853, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030405324931541845
+now it is 1150 steps  and the cls_loss is : tensor(0.4022, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003044302448585684
+now it is 1200 steps  and the cls_loss is : tensor(0.3441, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003048239731430805
+now it is 1250 steps  and the cls_loss is : tensor(0.3375, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030523442927277286
+now it is 1300 steps  and the cls_loss is : tensor(0.2067, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003056616081434471
+now it is 1350 steps  and the cls_loss is : tensor(0.1874, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030610550444294844
+now it is 1400 steps  and the cls_loss is : tensor(0.3134, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030656611265123543
+now it is 1450 steps  and the cls_loss is : tensor(0.2929, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003070434270404459
+now it is 1500 steps  and the cls_loss is : tensor(0.1283, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003075374416749688
+now it is 1550 steps  and the cls_loss is : tensor(0.2071, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030804815041151875
+now it is 1600 steps  and the cls_loss is : tensor(0.2987, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003085755468992127
+now it is 1650 steps  and the cls_loss is : tensor(0.3848, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00030911962457964674
+now it is 1700 steps  and the cls_loss is : tensor(0.2823, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003096803766869799
+now it is 1750 steps  and the cls_loss is : tensor(0.3073, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000310257796248018
+now it is 1800 steps  and the cls_loss is : tensor(0.2325, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00031085187608229916
+now it is 1850 steps  and the cls_loss is : tensor(0.2041, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003114626088021842
+now it is 1900 steps  and the cls_loss is : tensor(0.1617, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00031208998681294753
+now it is 1950 steps  and the cls_loss is : tensor(0.2291, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003127340023128724
+now it is 2000 steps  and the cls_loss is : tensor(0.3458, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003133946472933481
+now it is 2050 steps  and the cls_loss is : tensor(0.2636, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00031407191353896883
+now it is 2100 steps  and the cls_loss is : tensor(0.1968, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00031476579262763654
+now it is 2150 steps  and the cls_loss is : tensor(0.2214, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003154762759306649
+now it is 2200 steps  and the cls_loss is : tensor(0.2394, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003162033546128874
+now it is 2250 steps  and the cls_loss is : tensor(0.2166, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003169470196327656
+now it is 2300 steps  and the cls_loss is : tensor(0.2697, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003177072617425044
+now it is 2350 steps  and the cls_loss is : tensor(0.2139, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00031848407148816473
+now it is 2400 steps  and the cls_loss is : tensor(0.1745, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003192774392097816
+now it is 2450 steps  and the cls_loss is : tensor(0.2588, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003200873550414851
+now it is 2500 steps  and the cls_loss is : tensor(0.2481, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00032091380891162164
+now it is 2550 steps  and the cls_loss is : tensor(0.1730, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00032175679054288015
+now it is 2600 steps  and the cls_loss is : tensor(0.1465, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00032261628945242033
+now it is 2650 steps  and the cls_loss is : tensor(0.1658, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003234922949520015
+now it is 2700 steps  and the cls_loss is : tensor(0.3292, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003243847961481171
+now it is 2750 steps  and the cls_loss is : tensor(0.2170, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003252937819421286
+now it is 2800 steps  and the cls_loss is : tensor(0.1790, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00032621924103040656
+now it is 2850 steps  and the cls_loss is : tensor(0.2050, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003271611619044658
+now it is 2900 steps  and the cls_loss is : tensor(0.1431, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00032811953285111434
+now it is 2950 steps  and the cls_loss is : tensor(0.3097, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003290943419525941
+now it is 3000 steps  and the cls_loss is : tensor(0.1937, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00033008557708673466
+now it is 3050 steps  and the cls_loss is : tensor(0.2035, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00033109322592709753
+now it is 3100 steps  and the cls_loss is : tensor(0.2673, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003321172759431349
+now it is 3150 steps  and the cls_loss is : tensor(0.1560, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000333157714400342
+now it is 3200 steps  and the cls_loss is : tensor(0.1437, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00033421452836041726
+now it is 3250 steps  and the cls_loss is : tensor(0.1652, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00033528770468142224
+now it is 3300 steps  and the cls_loss is : tensor(0.2743, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003363772300179458
+now it is 3350 steps  and the cls_loss is : tensor(0.1915, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003374830908212706
+now it is 3400 steps  and the cls_loss is : tensor(0.2126, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000338605273339539
+now it is 3450 steps  and the cls_loss is : tensor(0.1727, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003397437636179267
+now it is 3500 steps  and the cls_loss is : tensor(0.3135, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00034089854749881545
+now it is 3550 steps  and the cls_loss is : tensor(0.1608, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00034206961062196875
+now it is 3600 steps  and the cls_loss is : tensor(0.2088, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00034325693842471045
+now it is 3650 steps  and the cls_loss is : tensor(0.2110, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00034446051614210734
+now it is 3700 steps  and the cls_loss is : tensor(0.2000, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00034568032880715003
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.18491861462335002
+generate label finished(21.83/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 3750 steps  and the cls_loss is : tensor(0.1613, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00034691636125094025
+now it is 3800 steps  and the cls_loss is : tensor(0.2781, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003481685981028817
+now it is 3850 steps  and the cls_loss is : tensor(0.1966, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003494370237908679
+now it is 3900 steps  and the cls_loss is : tensor(0.2098, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003507216225414776
+now it is 3950 steps  and the cls_loss is : tensor(0.1604, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003520223783801701
+now it is 4000 steps  and the cls_loss is : tensor(0.1883, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00035333927513148426
+now it is 4050 steps  and the cls_loss is : tensor(0.1537, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00035467229641924104
+now it is 4100 steps  and the cls_loss is : tensor(0.1853, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00035602142566674424
+now it is 4150 steps  and the cls_loss is : tensor(0.1492, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003573866460969892
+now it is 4200 steps  and the cls_loss is : tensor(0.1791, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003587679407328695
+now it is 4250 steps  and the cls_loss is : tensor(0.1783, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003601652923973897
+now it is 4300 steps  and the cls_loss is : tensor(0.1640, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003615786837138789
+now it is 4350 steps  and the cls_loss is : tensor(0.1116, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003630080971062056
+now it is 4400 steps  and the cls_loss is : tensor(0.2543, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003644535147989958
+now it is 4450 steps  and the cls_loss is : tensor(0.3094, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00036591491881785617
+now it is 4500 steps  and the cls_loss is : tensor(0.2061, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003673922909895977
+now it is 4550 steps  and the cls_loss is : tensor(0.1598, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00036888561294245786
+now it is 4600 steps  and the cls_loss is : tensor(0.1296, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00037039486610633337
+now it is 4650 steps  and the cls_loss is : tensor(0.2114, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003719200317130098
+now it is 4700 steps  and the cls_loss is : tensor(0.2199, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00037346109079639325
+now it is 4750 steps  and the cls_loss is : tensor(0.1421, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00037501802419274846
+now it is 4800 steps  and the cls_loss is : tensor(0.2076, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000376590812540936
+now it is 4850 steps  and the cls_loss is : tensor(0.3047, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003781794362826534
+now it is 4900 steps  and the cls_loss is : tensor(0.2036, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003797838756626785
+now it is 4950 steps  and the cls_loss is : tensor(0.2959, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00038140411072911393
+now it is 5000 steps  and the cls_loss is : tensor(0.1432, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00038304012133363744
+now it is 5050 steps  and the cls_loss is : tensor(0.2694, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003846918871317495
+now it is 5100 steps  and the cls_loss is : tensor(0.2014, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00038635938758302965
+now it is 5150 steps  and the cls_loss is : tensor(0.2033, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003880426019513884
+now it is 5200 steps  and the cls_loss is : tensor(0.1460, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003897415093053291
+now it is 5250 steps  and the cls_loss is : tensor(0.1407, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003914560885182046
+now it is 5300 steps  and the cls_loss is : tensor(0.1612, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00039318631826848124
+now it is 5350 steps  and the cls_loss is : tensor(0.2096, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00039493217704000523
+now it is 5400 steps  and the cls_loss is : tensor(0.2719, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0003966936431222677
+now it is 5450 steps  and the cls_loss is : tensor(0.1735, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00039847069461067773
+now it is 5500 steps  and the cls_loss is : tensor(0.1609, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004002633094068323
+now it is 5550 steps  and the cls_loss is : tensor(0.1405, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004020714652187918
+now it is 5600 steps  and the cls_loss is : tensor(0.2061, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004038951395613573
+now it is 5650 steps  and the cls_loss is : tensor(0.1257, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00040573430975635125
+now it is 5700 steps  and the cls_loss is : tensor(0.1244, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004075889529328975
+now it is 5750 steps  and the cls_loss is : tensor(0.1377, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004094590460277064
+now it is 5800 steps  and the cls_loss is : tensor(0.1731, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004113445657853631
+now it is 5850 steps  and the cls_loss is : tensor(0.1764, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00041324548875861476
+now it is 5900 steps  and the cls_loss is : tensor(0.1397, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00041516179130866296
+now it is 5950 steps  and the cls_loss is : tensor(0.3767, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004170934496054578
+now it is 6000 steps  and the cls_loss is : tensor(0.1629, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004190404396279936
+now it is 6050 steps  and the cls_loss is : tensor(0.0950, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004210027371646082
+now it is 6100 steps  and the cls_loss is : tensor(0.1735, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004229803178132847
+now it is 6150 steps  and the cls_loss is : tensor(0.1437, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000424973156981953
+now it is 6200 steps  and the cls_loss is : tensor(0.1895, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004269812298887967
+now it is 6250 steps  and the cls_loss is : tensor(0.2103, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004290045115625629
+now it is 6300 steps  and the cls_loss is : tensor(0.1941, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004310429768428687
+now it is 6350 steps  and the cls_loss is : tensor(0.1359, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00043309660038051874
+now it is 6400 steps  and the cls_loss is : tensor(0.1755, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00043516535663781645
+now it is 6450 steps  and the cls_loss is : tensor(0.1213, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004372492198888847
+now it is 6500 steps  and the cls_loss is : tensor(0.1931, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00043934816421998266
+now it is 6550 steps  and the cls_loss is : tensor(0.1940, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00044146216352983214
+now it is 6600 steps  and the cls_loss is : tensor(0.1952, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00044359119152993787
+now it is 6650 steps  and the cls_loss is : tensor(0.2031, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00044573522174491675
+now it is 6700 steps  and the cls_loss is : tensor(0.1239, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00044789422751282705
+now it is 6750 steps  and the cls_loss is : tensor(0.1649, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004500681819855001
+now it is 6800 steps  and the cls_loss is : tensor(0.1971, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004522570581288717
+now it is 6850 steps  and the cls_loss is : tensor(0.1602, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004544608287233216
+now it is 6900 steps  and the cls_loss is : tensor(0.1519, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004566794663640114
+now it is 6950 steps  and the cls_loss is : tensor(0.1143, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004589129434612229
+now it is 7000 steps  and the cls_loss is : tensor(0.2017, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004611612322407031
+now it is 7050 steps  and the cls_loss is : tensor(0.1602, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00046342430474401045
+now it is 7100 steps  and the cls_loss is : tensor(0.1789, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004657021328288609
+now it is 7150 steps  and the cls_loss is : tensor(0.2309, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004679946881694778
+now it is 7200 steps  and the cls_loss is : tensor(0.1406, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000470301942256945
+now it is 7250 steps  and the cls_loss is : tensor(0.1343, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004726238663995616
+now it is 7300 steps  and the cls_loss is : tensor(0.2184, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00047496043172319796
+now it is 7350 steps  and the cls_loss is : tensor(0.1732, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004773116091716539
+now it is 7400 steps  and the cls_loss is : tensor(0.1285, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00047967736950702347
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.15778381110100734
+generate label finished(22.00/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 7450 steps  and the cls_loss is : tensor(0.1996, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00048205768331005365
+now it is 7500 steps  and the cls_loss is : tensor(0.1554, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00048445252098051504
+now it is 7550 steps  and the cls_loss is : tensor(0.1900, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004868618527375658
+now it is 7600 steps  and the cls_loss is : tensor(0.1698, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004892856486201254
+now it is 7650 steps  and the cls_loss is : tensor(0.1635, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004917238784872455
+now it is 7700 steps  and the cls_loss is : tensor(0.0878, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004941765120184826
+now it is 7750 steps  and the cls_loss is : tensor(0.2799, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004966435187142809
+now it is 7800 steps  and the cls_loss is : tensor(0.1036, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0004991248678963447
+now it is 7850 steps  and the cls_loss is : tensor(0.1096, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005016205287080274
+now it is 7900 steps  and the cls_loss is : tensor(0.2099, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005041304701147065
+now it is 7950 steps  and the cls_loss is : tensor(0.0976, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005066546609041774
+now it is 8000 steps  and the cls_loss is : tensor(0.1257, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005091930696870372
+now it is 8050 steps  and the cls_loss is : tensor(0.1873, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005117456648970754
+now it is 8100 steps  and the cls_loss is : tensor(0.1528, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005143124147916687
+now it is 8150 steps  and the cls_loss is : tensor(0.2458, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005168932874521732
+now it is 8200 steps  and the cls_loss is : tensor(0.1768, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005194882507843215
+now it is 8250 steps  and the cls_loss is : tensor(0.1391, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005220972725186249
+now it is 8300 steps  and the cls_loss is : tensor(0.1401, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00052472032021077
+now it is 8350 steps  and the cls_loss is : tensor(0.1612, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005273573612420259
+now it is 8400 steps  and the cls_loss is : tensor(0.1798, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005300083628196487
+now it is 8450 steps  and the cls_loss is : tensor(0.1383, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005326732919772883
+now it is 8500 steps  and the cls_loss is : tensor(0.2116, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005353521155753989
+now it is 8550 steps  and the cls_loss is : tensor(0.3373, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005380448003016523
+now it is 8600 steps  and the cls_loss is : tensor(0.1418, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000540751312671351
+now it is 8650 steps  and the cls_loss is : tensor(0.2618, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005434716190278431
+now it is 8700 steps  and the cls_loss is : tensor(0.2264, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005462056855429455
+now it is 8750 steps  and the cls_loss is : tensor(0.1974, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005489534782173598
+now it is 8800 steps  and the cls_loss is : tensor(0.1620, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005517149628810961
+now it is 8850 steps  and the cls_loss is : tensor(0.2002, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005544901051939004
+now it is 8900 steps  and the cls_loss is : tensor(0.1940, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005572788706456788
+now it is 8950 steps  and the cls_loss is : tensor(0.1553, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005600812245569282
+now it is 9000 steps  and the cls_loss is : tensor(0.1405, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005628971320791676
+now it is 9050 steps  and the cls_loss is : tensor(0.0698, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005657265581953705
+now it is 9100 steps  and the cls_loss is : tensor(0.2479, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005685694677203998
+now it is 9150 steps  and the cls_loss is : tensor(0.1997, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005714258253014487
+now it is 9200 steps  and the cls_loss is : tensor(0.1832, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005742955954184756
+now it is 9250 steps  and the cls_loss is : tensor(0.1413, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005771787423846505
+now it is 9300 steps  and the cls_loss is : tensor(0.1451, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005800752303467952
+now it is 9350 steps  and the cls_loss is : tensor(0.2632, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005829850232858297
+now it is 9400 steps  and the cls_loss is : tensor(0.0945, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000585908085017222
+now it is 9450 steps  and the cls_loss is : tensor(0.1268, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005888443791914376
+now it is 9500 steps  and the cls_loss is : tensor(0.1263, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005917938692943897
+now it is 9550 steps  and the cls_loss is : tensor(0.3854, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005947565186478943
+now it is 9600 steps  and the cls_loss is : tensor(0.1018, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0005977322904101271
+now it is 9650 steps  and the cls_loss is : tensor(0.1827, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006007211475760805
+now it is 9700 steps  and the cls_loss is : tensor(0.1880, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006037230529780248
+now it is 9750 steps  and the cls_loss is : tensor(0.1786, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006067379692859688
+now it is 9800 steps  and the cls_loss is : tensor(0.0711, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006097658590081263
+now it is 9850 steps  and the cls_loss is : tensor(0.1176, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006128066844913816
+now it is 9900 steps  and the cls_loss is : tensor(0.2325, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006158604079217543
+now it is 9950 steps  and the cls_loss is : tensor(0.1339, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006189269913248756
+now it is 10000 steps  and the cls_loss is : tensor(0.1044, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006220063965664559
+now it is 10050 steps  and the cls_loss is : tensor(0.1488, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006250985853527603
+now it is 10100 steps  and the cls_loss is : tensor(0.3190, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006282035192310856
+now it is 10150 steps  and the cls_loss is : tensor(0.1572, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006313211595902384
+now it is 10200 steps  and the cls_loss is : tensor(0.1654, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006344514676610131
+now it is 10250 steps  and the cls_loss is : tensor(0.2479, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006375944045166767
+now it is 10300 steps  and the cls_loss is : tensor(0.2334, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006407499310734522
+now it is 10350 steps  and the cls_loss is : tensor(0.1551, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006439180080910038
+now it is 10400 steps  and the cls_loss is : tensor(0.1876, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006470985961729244
+now it is 10450 steps  and the cls_loss is : tensor(0.2015, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006502916557672282
+now it is 10500 steps  and the cls_loss is : tensor(0.1373, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006534971471668385
+now it is 10550 steps  and the cls_loss is : tensor(0.0893, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006567150305100858
+now it is 10600 steps  and the cls_loss is : tensor(0.1479, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006599452657812003
+now it is 10650 steps  and the cls_loss is : tensor(0.1796, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006631878128108117
+now it is 10700 steps  and the cls_loss is : tensor(0.1596, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006664426312764462
+now it is 10750 steps  and the cls_loss is : tensor(0.1400, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006697096807030301
+now it is 10800 steps  and the cls_loss is : tensor(0.1688, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006729889204633928
+now it is 10850 steps  and the cls_loss is : tensor(0.1908, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006762803097787708
+now it is 10900 steps  and the cls_loss is : tensor(0.1627, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006795838077193164
+now it is 10950 steps  and the cls_loss is : tensor(0.1679, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006828993732046064
+now it is 11000 steps  and the cls_loss is : tensor(0.2277, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006862269650041502
+now it is 11050 steps  and the cls_loss is : tensor(0.1887, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006895665417379075
+now it is 11100 steps  and the cls_loss is : tensor(0.1971, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006929180618767978
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.15008198925848942
+generate label finished(21.49/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.25, 0.32, 0.32
+bev  AP:3.08, 3.21, 3.21
+3d   AP:1.00, 0.62, 0.62
+aos  AP:0.25, 0.32, 0.32
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.25, 0.32, 0.32
+bev  AP:7.04, 7.07, 7.07
+3d   AP:3.60, 3.69, 3.69
+aos  AP:0.25, 0.32, 0.32
+
+now it is 11150 steps  and the cls_loss is : tensor(0.1429, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006962814837432208
+now it is 11200 steps  and the cls_loss is : tensor(0.1644, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0006996567655115733
+now it is 11250 steps  and the cls_loss is : tensor(0.1633, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007030438652087679
+now it is 11300 steps  and the cls_loss is : tensor(0.1832, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007064427407147567
+now it is 11350 steps  and the cls_loss is : tensor(0.2015, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007098533497630539
+now it is 11400 steps  and the cls_loss is : tensor(0.1585, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007132756499412633
+now it is 11450 steps  and the cls_loss is : tensor(0.3165, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007167095986916035
+now it is 11500 steps  and the cls_loss is : tensor(0.1690, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007201551533114392
+now it is 11550 steps  and the cls_loss is : tensor(0.1595, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007236122709538082
+now it is 11600 steps  and the cls_loss is : tensor(0.1647, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007270809086279617
+now it is 11650 steps  and the cls_loss is : tensor(0.0736, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007305610231998897
+now it is 11700 steps  and the cls_loss is : tensor(0.1136, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007340525713928655
+now it is 11750 steps  and the cls_loss is : tensor(0.1995, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007375555097879779
+now it is 11800 steps  and the cls_loss is : tensor(0.1269, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007410697948246757
+now it is 11850 steps  and the cls_loss is : tensor(0.1220, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007445953828013061
+now it is 11900 steps  and the cls_loss is : tensor(0.1256, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007481322298756587
+now it is 11950 steps  and the cls_loss is : tensor(0.1340, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007516802920655131
+now it is 12000 steps  and the cls_loss is : tensor(0.2153, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007552395252491831
+now it is 12050 steps  and the cls_loss is : tensor(0.1583, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007588098851660664
+now it is 12100 steps  and the cls_loss is : tensor(0.1553, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007623913274171948
+now it is 12150 steps  and the cls_loss is : tensor(0.2193, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007659838074657874
+now it is 12200 steps  and the cls_loss is : tensor(0.1573, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000769587280637802
+now it is 12250 steps  and the cls_loss is : tensor(0.1450, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007732017021224941
+now it is 12300 steps  and the cls_loss is : tensor(0.1709, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007768270269729698
+now it is 12350 steps  and the cls_loss is : tensor(0.1798, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007804632101067496
+now it is 12400 steps  and the cls_loss is : tensor(0.1841, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007841102063063251
+now it is 12450 steps  and the cls_loss is : tensor(0.3263, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007877679702197227
+now it is 12500 steps  and the cls_loss is : tensor(0.1288, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007914364563610683
+now it is 12550 steps  and the cls_loss is : tensor(0.1832, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000795115619111152
+now it is 12600 steps  and the cls_loss is : tensor(0.1470, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0007988054127179957
+now it is 12650 steps  and the cls_loss is : tensor(0.1269, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008025057912974219
+now it is 12700 steps  and the cls_loss is : tensor(0.2119, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000806216708833624
+now it is 12750 steps  and the cls_loss is : tensor(0.1928, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008099381191797399
+now it is 12800 steps  and the cls_loss is : tensor(0.0921, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008136699760584237
+now it is 12850 steps  and the cls_loss is : tensor(0.1199, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008174122330624235
+now it is 12900 steps  and the cls_loss is : tensor(0.0649, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008211648436551571
+now it is 12950 steps  and the cls_loss is : tensor(0.1469, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008249277611712901
+now it is 13000 steps  and the cls_loss is : tensor(0.1845, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008287009388173181
+now it is 13050 steps  and the cls_loss is : tensor(0.1676, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000832484329672146
+now it is 13100 steps  and the cls_loss is : tensor(0.1619, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000836277886687675
+now it is 13150 steps  and the cls_loss is : tensor(0.1621, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008400815626893854
+now it is 13200 steps  and the cls_loss is : tensor(0.1835, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008438953103769215
+now it is 13250 steps  and the cls_loss is : tensor(0.2519, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008477190823246846
+now it is 13300 steps  and the cls_loss is : tensor(0.1612, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008515528309824176
+now it is 13350 steps  and the cls_loss is : tensor(0.1549, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008553965086758007
+now it is 13400 steps  and the cls_loss is : tensor(0.1025, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008592500676070408
+now it is 13450 steps  and the cls_loss is : tensor(0.1413, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008631134598554679
+now it is 13500 steps  and the cls_loss is : tensor(0.1793, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008669866373781309
+now it is 13550 steps  and the cls_loss is : tensor(0.1261, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008708695520103934
+now it is 13600 steps  and the cls_loss is : tensor(0.1841, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008747621554665349
+now it is 13650 steps  and the cls_loss is : tensor(0.3252, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008786643993403498
+now it is 13700 steps  and the cls_loss is : tensor(0.1649, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008825762351057503
+now it is 13750 steps  and the cls_loss is : tensor(0.1298, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008864976141173676
+now it is 13800 steps  and the cls_loss is : tensor(0.1534, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000890428487611161
+now it is 13850 steps  and the cls_loss is : tensor(0.1184, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008943688067050196
+now it is 13900 steps  and the cls_loss is : tensor(0.1229, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0008983185223993737
+now it is 13950 steps  and the cls_loss is : tensor(0.1674, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009022775855778019
+now it is 14000 steps  and the cls_loss is : tensor(0.1094, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009062459470076437
+now it is 14050 steps  and the cls_loss is : tensor(0.1927, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009102235573406102
+now it is 14100 steps  and the cls_loss is : tensor(0.2427, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009142103671133991
+now it is 14150 steps  and the cls_loss is : tensor(0.2357, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009182063267483085
+now it is 14200 steps  and the cls_loss is : tensor(0.2054, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009222113865538532
+now it is 14250 steps  and the cls_loss is : tensor(0.1843, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009262254967253849
+now it is 14300 steps  and the cls_loss is : tensor(0.1669, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00093024860734571
+now it is 14350 steps  and the cls_loss is : tensor(0.1662, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009342806683857092
+now it is 14400 steps  and the cls_loss is : tensor(0.1816, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009383216297049624
+now it is 14450 steps  and the cls_loss is : tensor(0.1236, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009423714410523695
+now it is 14500 steps  and the cls_loss is : tensor(0.1885, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000946430052066777
+now it is 14550 steps  and the cls_loss is : tensor(0.2566, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009504974122776033
+now it is 14600 steps  and the cls_loss is : tensor(0.1233, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009545734711054678
+now it is 14650 steps  and the cls_loss is : tensor(0.1314, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009586581778628176
+now it is 14700 steps  and the cls_loss is : tensor(0.1320, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009627514817545598
+now it is 14750 steps  and the cls_loss is : tensor(0.1197, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009668533318786918
+now it is 14800 steps  and the cls_loss is : tensor(0.2187, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009709636772269365
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.15254957484498424
+generate label finished(21.35/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.18, 0.22, 0.22
+bev  AP:5.42, 5.51, 5.51
+3d   AP:0.34, 0.34, 0.34
+aos  AP:0.18, 0.22, 0.22
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.18, 0.22, 0.22
+bev  AP:13.94, 14.02, 14.02
+3d   AP:8.41, 8.60, 8.60
+aos  AP:0.18, 0.22, 0.22
+
+now it is 14850 steps  and the cls_loss is : tensor(0.1823, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009750824666853726
+now it is 14900 steps  and the cls_loss is : tensor(0.3423, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009792096490350744
+now it is 14950 steps  and the cls_loss is : tensor(0.1725, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000983345172952746
+now it is 15000 steps  and the cls_loss is : tensor(0.1296, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009874889870113614
+now it is 15050 steps  and the cls_loss is : tensor(0.1919, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.000991641039680803
+now it is 15100 steps  and the cls_loss is : tensor(0.1863, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009958012793285023
+now it is 15150 steps  and the cls_loss is : tensor(0.1537, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0009999696542200807
+now it is 15200 steps  and the cls_loss is : tensor(0.1955, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010041461125199968
+now it is 15250 steps  and the cls_loss is : tensor(0.1370, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010083306022921875
+now it is 15300 steps  and the cls_loss is : tensor(0.1678, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010125230715007146
+now it is 15350 steps  and the cls_loss is : tensor(0.1136, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010167234680104123
+now it is 15400 steps  and the cls_loss is : tensor(0.1835, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010209317395875354
+now it is 15450 steps  and the cls_loss is : tensor(0.2761, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010251478339004094
+now it is 15500 steps  and the cls_loss is : tensor(0.0959, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010293716985200789
+now it is 15550 steps  and the cls_loss is : tensor(0.1393, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010336032809209637
+now it is 15600 steps  and the cls_loss is : tensor(0.1462, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010378425284815092
+now it is 15650 steps  and the cls_loss is : tensor(0.1877, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010420893884848393
+now it is 15700 steps  and the cls_loss is : tensor(0.1221, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001046343808119416
+now it is 15750 steps  and the cls_loss is : tensor(0.1612, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010506057344796932
+now it is 15800 steps  and the cls_loss is : tensor(0.2757, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010548751145667754
+now it is 15850 steps  and the cls_loss is : tensor(0.2201, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010591518952890767
+now it is 15900 steps  and the cls_loss is : tensor(0.1715, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010634360234629816
+now it is 15950 steps  and the cls_loss is : tensor(0.1512, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010677274458135056
+now it is 16000 steps  and the cls_loss is : tensor(0.1030, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010720261089749573
+now it is 16050 steps  and the cls_loss is : tensor(0.1399, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001076331959491604
+now it is 16100 steps  and the cls_loss is : tensor(0.1322, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010806449438183333
+now it is 16150 steps  and the cls_loss is : tensor(0.1859, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010849650083213235
+now it is 16200 steps  and the cls_loss is : tensor(0.1367, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010892920992787054
+now it is 16250 steps  and the cls_loss is : tensor(0.1225, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0010936261628812336
+now it is 16300 steps  and the cls_loss is : tensor(0.1958, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001097967145232955
+now it is 16350 steps  and the cls_loss is : tensor(0.1382, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001102314992351879
+now it is 16400 steps  and the cls_loss is : tensor(0.1999, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001106669650170648
+now it is 16450 steps  and the cls_loss is : tensor(0.1591, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001111031064537211
+now it is 16500 steps  and the cls_loss is : tensor(0.1032, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011153991812154966
+now it is 16550 steps  and the cls_loss is : tensor(0.1643, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011197739458860868
+now it is 16600 steps  and the cls_loss is : tensor(0.1735, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011241553041468927
+now it is 16650 steps  and the cls_loss is : tensor(0.1865, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011285432015138313
+now it is 16700 steps  and the cls_loss is : tensor(0.1965, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011329375834215043
+now it is 16750 steps  and the cls_loss is : tensor(0.1696, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001137338395223874
+now it is 16800 steps  and the cls_loss is : tensor(0.1276, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001141745582194944
+now it is 16850 steps  and the cls_loss is : tensor(0.1166, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011461590895294406
+now it is 16900 steps  and the cls_loss is : tensor(0.2100, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011505788623434941
+now it is 16950 steps  and the cls_loss is : tensor(0.2471, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011550048456753198
+now it is 17000 steps  and the cls_loss is : tensor(0.0951, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011594369844859025
+now it is 17050 steps  and the cls_loss is : tensor(0.1839, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011638752236596826
+now it is 17100 steps  and the cls_loss is : tensor(0.1667, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011683195080052372
+now it is 17150 steps  and the cls_loss is : tensor(0.1269, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011727697822559717
+now it is 17200 steps  and the cls_loss is : tensor(0.2116, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011772259910708027
+now it is 17250 steps  and the cls_loss is : tensor(0.0585, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001181688079034849
+now it is 17300 steps  and the cls_loss is : tensor(0.1833, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011861559906601188
+now it is 17350 steps  and the cls_loss is : tensor(0.2219, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011906296703862015
+now it is 17400 steps  and the cls_loss is : tensor(0.2231, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001195109062580956
+now it is 17450 steps  and the cls_loss is : tensor(0.0844, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0011995941115412062
+now it is 17500 steps  and the cls_loss is : tensor(0.0791, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012040847614934306
+now it is 17550 steps  and the cls_loss is : tensor(0.2824, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001208580956594457
+now it is 17600 steps  and the cls_loss is : tensor(0.1618, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001213082640932157
+now it is 17650 steps  and the cls_loss is : tensor(0.1953, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012175897585261412
+now it is 17700 steps  and the cls_loss is : tensor(0.2196, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001222102253328455
+now it is 17750 steps  and the cls_loss is : tensor(0.1827, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001226620069224277
+now it is 17800 steps  and the cls_loss is : tensor(0.1764, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012311431500326132
+now it is 17850 steps  and the cls_loss is : tensor(0.1250, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012356714395070016
+now it is 17900 steps  and the cls_loss is : tensor(0.1280, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012402048813362058
+now it is 17950 steps  and the cls_loss is : tensor(0.1678, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012447434191449175
+now it is 18000 steps  and the cls_loss is : tensor(0.0751, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012492869964944595
+now it is 18050 steps  and the cls_loss is : tensor(0.1935, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001253835556883484
+now it is 18100 steps  and the cls_loss is : tensor(0.1762, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012583890437486778
+now it is 18150 steps  and the cls_loss is : tensor(0.1466, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012629474004654648
+now it is 18200 steps  and the cls_loss is : tensor(0.1073, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012675105703487098
+now it is 18250 steps  and the cls_loss is : tensor(0.1612, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001272078496653424
+now it is 18300 steps  and the cls_loss is : tensor(0.2315, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012766511225754708
+now it is 18350 steps  and the cls_loss is : tensor(0.1727, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001281228391252271
+now it is 18400 steps  and the cls_loss is : tensor(0.1473, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012858102457635116
+now it is 18450 steps  and the cls_loss is : tensor(0.1257, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012903966291318526
+now it is 18500 steps  and the cls_loss is : tensor(0.1392, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001294987484323635
+now it is 18550 steps  and the cls_loss is : tensor(0.1540, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0012995827542495917
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.1507274250621141
+generate label finished(21.46/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 18600 steps  and the cls_loss is : tensor(0.1733, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013041823817655559
+now it is 18650 steps  and the cls_loss is : tensor(0.1382, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013087863096731725
+now it is 18700 steps  and the cls_loss is : tensor(0.1365, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013133944807206092
+now it is 18750 steps  and the cls_loss is : tensor(0.1751, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001318006837603268
+now it is 18800 steps  and the cls_loss is : tensor(0.1698, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013226233229644987
+now it is 18850 steps  and the cls_loss is : tensor(0.1363, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013272438793963115
+now it is 18900 steps  and the cls_loss is : tensor(0.0615, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001331868449440091
+now it is 18950 steps  and the cls_loss is : tensor(0.1331, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013364969755873116
+now it is 19000 steps  and the cls_loss is : tensor(0.1542, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00134112940028025
+now it is 19050 steps  and the cls_loss is : tensor(0.1516, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013457656659127053
+now it is 19100 steps  and the cls_loss is : tensor(0.3584, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00135040571483071
+now it is 19150 steps  and the cls_loss is : tensor(0.3842, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013550494893332526
+now it is 19200 steps  and the cls_loss is : tensor(0.1839, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013596969316729908
+now it is 19250 steps  and the cls_loss is : tensor(0.1356, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001364347984056971
+now it is 19300 steps  and the cls_loss is : tensor(0.1577, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013690025886473481
+now it is 19350 steps  and the cls_loss is : tensor(0.1293, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001373660687562103
+now it is 19400 steps  and the cls_loss is : tensor(0.1461, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013783222228757632
+now it is 19450 steps  and the cls_loss is : tensor(0.1516, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013829871366201237
+now it is 19500 steps  and the cls_loss is : tensor(0.1076, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013876553707849665
+now it is 19550 steps  and the cls_loss is : tensor(0.0934, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0013923268673187834
+now it is 19600 steps  and the cls_loss is : tensor(0.1718, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001397001568129497
+now it is 19650 steps  and the cls_loss is : tensor(0.1406, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014016794150851829
+now it is 19700 steps  and the cls_loss is : tensor(0.1678, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014063603500147936
+now it is 19750 steps  and the cls_loss is : tensor(0.1394, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014110443147088813
+now it is 19800 steps  and the cls_loss is : tensor(0.1702, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014157312509203218
+now it is 19850 steps  and the cls_loss is : tensor(0.1878, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014204211003650377
+now it is 19900 steps  and the cls_loss is : tensor(0.1131, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014251138047227262
+now it is 19950 steps  and the cls_loss is : tensor(0.1447, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014298093056375805
+now it is 20000 steps  and the cls_loss is : tensor(0.2544, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014345075447190186
+now it is 20050 steps  and the cls_loss is : tensor(0.1673, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001439208463542408
+now it is 20100 steps  and the cls_loss is : tensor(0.1152, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014439120036497924
+now it is 20150 steps  and the cls_loss is : tensor(0.1595, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001448618106550619
+now it is 20200 steps  and the cls_loss is : tensor(0.1600, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014533267137224646
+now it is 20250 steps  and the cls_loss is : tensor(0.1120, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014580377666117647
+now it is 20300 steps  and the cls_loss is : tensor(0.1466, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014627512066345424
+now it is 20350 steps  and the cls_loss is : tensor(0.2935, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001467466975177134
+now it is 20400 steps  and the cls_loss is : tensor(0.2314, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014721850135969213
+now it is 20450 steps  and the cls_loss is : tensor(0.1030, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014769052632230576
+now it is 20500 steps  and the cls_loss is : tensor(0.1844, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014816276653572004
+now it is 20550 steps  and the cls_loss is : tensor(0.0901, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014863521612742386
+now it is 20600 steps  and the cls_loss is : tensor(0.1761, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014910786922230246
+now it is 20650 steps  and the cls_loss is : tensor(0.1253, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0014958071994271038
+now it is 20700 steps  and the cls_loss is : tensor(0.1690, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015005376240854475
+now it is 20750 steps  and the cls_loss is : tensor(0.1241, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015052699073731805
+now it is 20800 steps  and the cls_loss is : tensor(0.2666, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015100039904423163
+now it is 20850 steps  and the cls_loss is : tensor(0.1498, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015147398144224869
+now it is 20900 steps  and the cls_loss is : tensor(0.1414, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015194773204216753
+now it is 20950 steps  and the cls_loss is : tensor(0.2118, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015242164495269475
+now it is 21000 steps  and the cls_loss is : tensor(0.0643, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001528957142805186
+now it is 21050 steps  and the cls_loss is : tensor(0.2391, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001533699341303822
+now it is 21100 steps  and the cls_loss is : tensor(0.2503, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015384429860515682
+now it is 21150 steps  and the cls_loss is : tensor(0.1407, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015431880180591536
+now it is 21200 steps  and the cls_loss is : tensor(0.1326, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015479343783200545
+now it is 21250 steps  and the cls_loss is : tensor(0.1613, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015526820078112312
+now it is 21300 steps  and the cls_loss is : tensor(0.1990, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00155743084749386
+now it is 21350 steps  and the cls_loss is : tensor(0.2786, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001562180838314068
+now it is 21400 steps  and the cls_loss is : tensor(0.1702, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015669319212036669
+now it is 21450 steps  and the cls_loss is : tensor(0.0558, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015716840370808894
+now it is 21500 steps  and the cls_loss is : tensor(0.2112, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015764371268511212
+now it is 21550 steps  and the cls_loss is : tensor(0.2051, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015811911314076374
+now it is 21600 steps  and the cls_loss is : tensor(0.2855, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015859459916323382
+now it is 21650 steps  and the cls_loss is : tensor(0.2000, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015907016483964825
+now it is 21700 steps  and the cls_loss is : tensor(0.0887, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0015954580425614235
+now it is 21750 steps  and the cls_loss is : tensor(0.1780, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016002151149793454
+now it is 21800 steps  and the cls_loss is : tensor(0.1968, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001604972806493998
+now it is 21850 steps  and the cls_loss is : tensor(0.2003, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016097310579414315
+now it is 21900 steps  and the cls_loss is : tensor(0.1384, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016144898101507338
+now it is 21950 steps  and the cls_loss is : tensor(0.1832, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016192490039447652
+now it is 22000 steps  and the cls_loss is : tensor(0.1684, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016240085801408955
+now it is 22050 steps  and the cls_loss is : tensor(0.0794, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016287684795517382
+now it is 22100 steps  and the cls_loss is : tensor(0.1798, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001633528642985888
+now it is 22150 steps  and the cls_loss is : tensor(0.1709, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001638289011248656
+now it is 22200 steps  and the cls_loss is : tensor(0.1422, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016430495251428068
+now it is 22250 steps  and the cls_loss is : tensor(0.1457, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016478101254692934
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.1507691700084193
+generate label finished(22.10/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.57, 0.73, 0.73
+bev  AP:2.31, 2.44, 2.44
+3d   AP:0.43, 0.49, 0.49
+aos  AP:0.57, 0.73, 0.73
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.57, 0.73, 0.73
+bev  AP:9.46, 9.51, 9.51
+3d   AP:4.81, 4.94, 4.94
+aos  AP:0.57, 0.73, 0.73
+
+now it is 22300 steps  and the cls_loss is : tensor(0.1902, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016525707530279938
+now it is 22350 steps  and the cls_loss is : tensor(0.1485, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001657331348618448
+now it is 22400 steps  and the cls_loss is : tensor(0.1763, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016620918530405933
+now it is 22450 steps  and the cls_loss is : tensor(0.1521, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016668522070955015
+now it is 22500 steps  and the cls_loss is : tensor(0.2654, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001671612351586112
+now it is 22550 steps  and the cls_loss is : tensor(0.1134, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016763722273179732
+now it is 22600 steps  and the cls_loss is : tensor(0.0613, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001681131775099973
+now it is 22650 steps  and the cls_loss is : tensor(0.1167, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001685890935745079
+now it is 22700 steps  and the cls_loss is : tensor(0.2038, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0016906496500710727
+now it is 22750 steps  and the cls_loss is : tensor(0.1321, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001695407858901286
+now it is 22800 steps  and the cls_loss is : tensor(0.1557, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017001655030653357
+now it is 22850 steps  and the cls_loss is : tensor(0.1829, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017049225233998625
+now it is 22900 steps  and the cls_loss is : tensor(0.1786, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017096788607492625
+now it is 22950 steps  and the cls_loss is : tensor(0.1554, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017144344559664273
+now it is 23000 steps  and the cls_loss is : tensor(0.1628, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017191892499134743
+now it is 23050 steps  and the cls_loss is : tensor(0.1473, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017239431834624875
+now it is 23100 steps  and the cls_loss is : tensor(0.1456, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017286961974962505
+now it is 23150 steps  and the cls_loss is : tensor(0.1758, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001733448232908979
+now it is 23200 steps  and the cls_loss is : tensor(0.1374, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001738199230607061
+now it is 23250 steps  and the cls_loss is : tensor(0.1562, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001742949131509787
+now it is 23300 steps  and the cls_loss is : tensor(0.1546, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017476978765500874
+now it is 23350 steps  and the cls_loss is : tensor(0.2569, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017524454066752662
+now it is 23400 steps  and the cls_loss is : tensor(0.1233, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001757191662847736
+now it is 23450 steps  and the cls_loss is : tensor(0.1186, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00176193658604575
+now it is 23500 steps  and the cls_loss is : tensor(0.1400, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017666801172641394
+now it is 23550 steps  and the cls_loss is : tensor(0.2230, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017714221975150433
+now it is 23600 steps  and the cls_loss is : tensor(0.1602, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017761627678286457
+now it is 23650 steps  and the cls_loss is : tensor(0.1537, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017809017692539076
+now it is 23700 steps  and the cls_loss is : tensor(0.1904, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017856391428592976
+now it is 23750 steps  and the cls_loss is : tensor(0.1905, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017903748297335297
+now it is 23800 steps  and the cls_loss is : tensor(0.1712, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017951087709862912
+now it is 23850 steps  and the cls_loss is : tensor(0.1442, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0017998409077489776
+now it is 23900 steps  and the cls_loss is : tensor(0.1190, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001804571181175424
+now it is 23950 steps  and the cls_loss is : tensor(0.1679, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018092995324426372
+now it is 24000 steps  and the cls_loss is : tensor(0.2462, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018140259027515258
+now it is 24050 steps  and the cls_loss is : tensor(0.2495, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018187502333276346
+now it is 24100 steps  and the cls_loss is : tensor(0.1942, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018234724654218706
+now it is 24150 steps  and the cls_loss is : tensor(0.1290, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018281925403112382
+now it is 24200 steps  and the cls_loss is : tensor(0.1695, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018329103992995677
+now it is 24250 steps  and the cls_loss is : tensor(0.1082, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018376259837182436
+now it is 24300 steps  and the cls_loss is : tensor(0.1209, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018423392349269372
+now it is 24350 steps  and the cls_loss is : tensor(0.2051, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018470500943143335
+now it is 24400 steps  and the cls_loss is : tensor(0.2207, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018517585032988607
+now it is 24450 steps  and the cls_loss is : tensor(0.2369, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001856464403329419
+now it is 24500 steps  and the cls_loss is : tensor(0.2189, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018611677358861094
+now it is 24550 steps  and the cls_loss is : tensor(0.1588, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018658684424809585
+now it is 24600 steps  and the cls_loss is : tensor(0.1378, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018705664646586503
+now it is 24650 steps  and the cls_loss is : tensor(0.1497, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018752617439972486
+now it is 24700 steps  and the cls_loss is : tensor(0.1581, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018799542221089266
+now it is 24750 steps  and the cls_loss is : tensor(0.1962, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001884643840640693
+now it is 24800 steps  and the cls_loss is : tensor(0.1888, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018893305412751138
+now it is 24850 steps  and the cls_loss is : tensor(0.1070, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018940142657310431
+now it is 24900 steps  and the cls_loss is : tensor(0.1284, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0018986949557643436
+now it is 24950 steps  and the cls_loss is : tensor(0.1262, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019033725531686127
+now it is 25000 steps  and the cls_loss is : tensor(0.2001, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001908046999775906
+now it is 25050 steps  and the cls_loss is : tensor(0.1544, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019127182374574605
+now it is 25100 steps  and the cls_loss is : tensor(0.1403, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019173862081244177
+now it is 25150 steps  and the cls_loss is : tensor(0.1605, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019220508537285466
+now it is 25200 steps  and the cls_loss is : tensor(0.1175, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019267121162629625
+now it is 25250 steps  and the cls_loss is : tensor(0.1574, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001931369937762853
+now it is 25300 steps  and the cls_loss is : tensor(0.2132, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019360242603061965
+now it is 25350 steps  and the cls_loss is : tensor(0.1866, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019406750260144796
+now it is 25400 steps  and the cls_loss is : tensor(0.2571, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019453221770534233
+now it is 25450 steps  and the cls_loss is : tensor(0.1274, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019499656556336957
+now it is 25500 steps  and the cls_loss is : tensor(0.1870, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019546054040116357
+now it is 25550 steps  and the cls_loss is : tensor(0.1185, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019592413644899664
+now it is 25600 steps  and the cls_loss is : tensor(0.2060, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019638734794185184
+now it is 25650 steps  and the cls_loss is : tensor(0.1728, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019685016911949404
+now it is 25700 steps  and the cls_loss is : tensor(0.2698, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019731259422654203
+now it is 25750 steps  and the cls_loss is : tensor(0.1334, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019777461751253967
+now it is 25800 steps  and the cls_loss is : tensor(0.2520, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0019823623323202803
+now it is 25850 steps  and the cls_loss is : tensor(0.1453, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001986974356446161
+now it is 25900 steps  and the cls_loss is : tensor(0.1674, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001991582190150527
+now it is 25950 steps  and the cls_loss is : tensor(0.1515, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.001996185776132975
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.17520171434890897
+generate label finished(21.98/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 26000 steps  and the cls_loss is : tensor(0.0967, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020007850571459244
+now it is 26050 steps  and the cls_loss is : tensor(0.2120, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020053799759953295
+now it is 26100 steps  and the cls_loss is : tensor(0.1011, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00200997047554139
+now it is 26150 steps  and the cls_loss is : tensor(0.2126, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020145564986992597
+now it is 26200 steps  and the cls_loss is : tensor(0.1581, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020191379884397604
+now it is 26250 steps  and the cls_loss is : tensor(0.1724, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020237148877900878
+now it is 26300 steps  and the cls_loss is : tensor(0.1111, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002028287139834521
+now it is 26350 steps  and the cls_loss is : tensor(0.0815, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002032854687715131
+now it is 26400 steps  and the cls_loss is : tensor(0.1708, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002037417474632486
+now it is 26450 steps  and the cls_loss is : tensor(0.1943, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020419754438463604
+now it is 26500 steps  and the cls_loss is : tensor(0.1465, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020465285386764382
+now it is 26550 steps  and the cls_loss is : tensor(0.1525, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020510767025030173
+now it is 26600 steps  and the cls_loss is : tensor(0.1789, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020556198787677164
+now it is 26650 steps  and the cls_loss is : tensor(0.1726, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020601580109741763
+now it is 26700 steps  and the cls_loss is : tensor(0.1128, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002064691042688762
+now it is 26750 steps  and the cls_loss is : tensor(0.0903, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002069218917541266
+now it is 26800 steps  and the cls_loss is : tensor(0.0647, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002073741579225609
+now it is 26850 steps  and the cls_loss is : tensor(0.1481, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002078258971500538
+now it is 26900 steps  and the cls_loss is : tensor(0.1476, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00208277103819033
+now it is 26950 steps  and the cls_loss is : tensor(0.2189, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002087277723185485
+now it is 27000 steps  and the cls_loss is : tensor(0.1381, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002091778970443429
+now it is 27050 steps  and the cls_loss is : tensor(0.1961, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0020962747239892093
+now it is 27100 steps  and the cls_loss is : tensor(0.2775, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021007649279161855
+now it is 27150 steps  and the cls_loss is : tensor(0.1432, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021052495263867346
+now it is 27200 steps  and the cls_loss is : tensor(0.1229, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002109728463632936
+now it is 27250 steps  and the cls_loss is : tensor(0.0934, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021142016839572697
+now it is 27300 steps  and the cls_loss is : tensor(0.1992, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021186691317333097
+now it is 27350 steps  and the cls_loss is : tensor(0.1156, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021231307514064128
+now it is 27400 steps  and the cls_loss is : tensor(0.1921, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00212758648749441
+now it is 27450 steps  and the cls_loss is : tensor(0.2425, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021320362845883003
+now it is 27500 steps  and the cls_loss is : tensor(0.1030, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021364800873529322
+now it is 27550 steps  and the cls_loss is : tensor(0.1840, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021409178405276995
+now it is 27600 steps  and the cls_loss is : tensor(0.1601, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002145349488927225
+now it is 27650 steps  and the cls_loss is : tensor(0.1601, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021497749774420454
+now it is 27700 steps  and the cls_loss is : tensor(0.2745, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021541942510393004
+now it is 27750 steps  and the cls_loss is : tensor(0.2218, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021586072547634125
+now it is 27800 steps  and the cls_loss is : tensor(0.1950, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021630139337367746
+now it is 27850 steps  and the cls_loss is : tensor(0.1477, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00216741423316043
+now it is 27900 steps  and the cls_loss is : tensor(0.1556, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021718080983147547
+now it is 27950 steps  and the cls_loss is : tensor(0.1697, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021761954745601365
+now it is 28000 steps  and the cls_loss is : tensor(0.2247, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002180576307337658
+now it is 28050 steps  and the cls_loss is : tensor(0.0635, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002184950542169769
+now it is 28100 steps  and the cls_loss is : tensor(0.1878, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002189318124660971
+now it is 28150 steps  and the cls_loss is : tensor(0.1401, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021936790004984897
+now it is 28200 steps  and the cls_loss is : tensor(0.1814, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0021980331154529487
+now it is 28250 steps  and the cls_loss is : tensor(0.2033, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002202380415379049
+now it is 28300 steps  and the cls_loss is : tensor(0.2609, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022067208462162365
+now it is 28350 steps  and the cls_loss is : tensor(0.1860, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022110543539893795
+now it is 28400 steps  and the cls_loss is : tensor(0.0651, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002215380884809437
+now it is 28450 steps  and the cls_loss is : tensor(0.2840, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002219700384874129
+now it is 28500 steps  and the cls_loss is : tensor(0.1384, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002224012800468605
+now it is 28550 steps  and the cls_loss is : tensor(0.1795, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002228318077966117
+now it is 28600 steps  and the cls_loss is : tensor(0.1401, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002232616163828676
+now it is 28650 steps  and the cls_loss is : tensor(0.2151, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022369070046077306
+now it is 28700 steps  and the cls_loss is : tensor(0.1159, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022411905469448207
+now it is 28750 steps  and the cls_loss is : tensor(0.1498, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002245466737572246
+now it is 28800 steps  and the cls_loss is : tensor(0.1488, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022497355233137314
+now it is 28850 steps  and the cls_loss is : tensor(0.0837, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022539968510850786
+now it is 28900 steps  and the cls_loss is : tensor(0.1666, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022582506678948387
+now it is 28950 steps  and the cls_loss is : tensor(0.2750, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002262496920844961
+now it is 29000 steps  and the cls_loss is : tensor(0.2057, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022667355571314553
+now it is 29050 steps  and the cls_loss is : tensor(0.2048, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002270966524045049
+now it is 29100 steps  and the cls_loss is : tensor(0.1609, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002275189768971841
+now it is 29150 steps  and the cls_loss is : tensor(0.1666, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002279405239393955
+now it is 29200 steps  and the cls_loss is : tensor(0.1509, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022836128828901976
+now it is 29250 steps  and the cls_loss is : tensor(0.1132, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002287812647136701
+now it is 29300 steps  and the cls_loss is : tensor(0.1694, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022920044799075844
+now it is 29350 steps  and the cls_loss is : tensor(0.1307, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022961883290755973
+now it is 29400 steps  and the cls_loss is : tensor(0.1816, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023003641426127654
+now it is 29450 steps  and the cls_loss is : tensor(0.1902, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023045318685910457
+now it is 29500 steps  and the cls_loss is : tensor(0.2483, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002308691455182964
+now it is 29550 steps  and the cls_loss is : tensor(0.1688, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023128428506622653
+now it is 29600 steps  and the cls_loss is : tensor(0.1214, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002316986003404552
+now it is 29650 steps  and the cls_loss is : tensor(0.1667, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023211208618879307
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.14961684784776227
+generate label finished(22.81/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 29700 steps  and the cls_loss is : tensor(0.1674, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023252473746936493
+now it is 29750 steps  and the cls_loss is : tensor(0.1138, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00232936549050674
+now it is 29800 steps  and the cls_loss is : tensor(0.2531, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023334751581166524
+now it is 29850 steps  and the cls_loss is : tensor(0.1054, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023375763264178936
+now it is 29900 steps  and the cls_loss is : tensor(0.2002, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023416689444106663
+now it is 29950 steps  and the cls_loss is : tensor(0.1921, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023457529612014956
+now it is 30000 steps  and the cls_loss is : tensor(0.1708, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023498283260038697
+now it is 30050 steps  and the cls_loss is : tensor(0.1408, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023538949881388663
+now it is 30100 steps  and the cls_loss is : tensor(0.1406, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002357952897035786
+now it is 30150 steps  and the cls_loss is : tensor(0.1223, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023620020022327767
+now it is 30200 steps  and the cls_loss is : tensor(0.1780, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002366042253377468
+now it is 30250 steps  and the cls_loss is : tensor(0.1848, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00237007360022759
+now it is 30300 steps  and the cls_loss is : tensor(0.1479, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023740959926516047
+now it is 30350 steps  and the cls_loss is : tensor(0.1753, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023781093806293234
+now it is 30400 steps  and the cls_loss is : tensor(0.1969, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002382113714252533
+now it is 30450 steps  and the cls_loss is : tensor(0.1258, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023861089437256155
+now it is 30500 steps  and the cls_loss is : tensor(0.1969, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002390095019366166
+now it is 30550 steps  and the cls_loss is : tensor(0.1754, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023940718916056125
+now it is 30600 steps  and the cls_loss is : tensor(0.1270, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023980395109898306
+now it is 30650 steps  and the cls_loss is : tensor(0.1643, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024019978281797586
+now it is 30700 steps  and the cls_loss is : tensor(0.0884, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024059467939520135
+now it is 30750 steps  and the cls_loss is : tensor(0.2213, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024098863591994987
+now it is 30800 steps  and the cls_loss is : tensor(0.2104, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024138164749320187
+now it is 30850 steps  and the cls_loss is : tensor(0.2129, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002417737092276888
+now it is 30900 steps  and the cls_loss is : tensor(0.1321, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024216481624795344
+now it is 30950 steps  and the cls_loss is : tensor(0.1876, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002425549636904111
+now it is 31000 steps  and the cls_loss is : tensor(0.1508, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002429441467034099
+now it is 31050 steps  and the cls_loss is : tensor(0.1605, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024333236044729073
+now it is 31100 steps  and the cls_loss is : tensor(0.1329, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024371960009444815
+now it is 31150 steps  and the cls_loss is : tensor(0.1665, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002441058608293898
+now it is 31200 steps  and the cls_loss is : tensor(0.1067, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024449113784879664
+now it is 31250 steps  and the cls_loss is : tensor(0.1816, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002448754263615824
+now it is 31300 steps  and the cls_loss is : tensor(0.2129, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002452587215889535
+now it is 31350 steps  and the cls_loss is : tensor(0.2214, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002456410187644681
+now it is 31400 steps  and the cls_loss is : tensor(0.1269, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002460223131340958
+now it is 31450 steps  and the cls_loss is : tensor(0.1126, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002464025999562763
+now it is 31500 steps  and the cls_loss is : tensor(0.1677, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024678187450197873
+now it is 31550 steps  and the cls_loss is : tensor(0.1828, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024716013205476036
+now it is 31600 steps  and the cls_loss is : tensor(0.1393, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024753736791082487
+now it is 31650 steps  and the cls_loss is : tensor(0.1582, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002479135773790817
+now it is 31700 steps  and the cls_loss is : tensor(0.1678, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002482887557812033
+now it is 31750 steps  and the cls_loss is : tensor(0.2249, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024866289845168446
+now it is 31800 steps  and the cls_loss is : tensor(0.1858, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002490360007378993
+now it is 31850 steps  and the cls_loss is : tensor(0.1606, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002494080580001597
+now it is 31900 steps  and the cls_loss is : tensor(0.1398, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024977906561177285
+now it is 31950 steps  and the cls_loss is : tensor(0.1585, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00250149018959099
+now it is 32000 steps  and the cls_loss is : tensor(0.2570, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025051791344160826
+now it is 32050 steps  and the cls_loss is : tensor(0.1989, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025088574447193848
+now it is 32100 steps  and the cls_loss is : tensor(0.1553, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002512525074759519
+now it is 32150 steps  and the cls_loss is : tensor(0.2257, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025161819789279206
+now it is 32200 steps  and the cls_loss is : tensor(0.1803, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025198281117494075
+now it is 32250 steps  and the cls_loss is : tensor(0.2103, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025234634278827415
+now it is 32300 steps  and the cls_loss is : tensor(0.1286, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025270878821211976
+now it is 32350 steps  and the cls_loss is : tensor(0.1922, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025307014293931207
+now it is 32400 steps  and the cls_loss is : tensor(0.1070, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025343040247624896
+now it is 32450 steps  and the cls_loss is : tensor(0.1518, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025378956234294744
+now it is 32500 steps  and the cls_loss is : tensor(0.0756, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025414761807309953
+now it is 32550 steps  and the cls_loss is : tensor(0.1317, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025450456521412734
+now it is 32600 steps  and the cls_loss is : tensor(0.1327, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002548603993272392
+now it is 32650 steps  and the cls_loss is : tensor(0.1620, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00255215115987484
+now it is 32700 steps  and the cls_loss is : tensor(0.1423, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002555687107838069
+now it is 32750 steps  and the cls_loss is : tensor(0.1507, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025592117931910394
+now it is 32800 steps  and the cls_loss is : tensor(0.1127, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002562725172102765
+now it is 32850 steps  and the cls_loss is : tensor(0.1137, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025662272008828623
+now it is 32900 steps  and the cls_loss is : tensor(0.2455, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025697178359820896
+now it is 32950 steps  and the cls_loss is : tensor(0.1450, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002573197033992892
+now it is 33000 steps  and the cls_loss is : tensor(0.1117, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002576664751649939
+now it is 33050 steps  and the cls_loss is : tensor(0.1338, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025801209458306646
+now it is 33100 steps  and the cls_loss is : tensor(0.1275, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025835655735557995
+now it is 33150 steps  and the cls_loss is : tensor(0.1499, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002586998591989911
+now it is 33200 steps  and the cls_loss is : tensor(0.2477, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025904199584419313
+now it is 33250 steps  and the cls_loss is : tensor(0.1348, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00259382963036569
+now it is 33300 steps  and the cls_loss is : tensor(0.2329, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025972275653604457
+now it is 33350 steps  and the cls_loss is : tensor(0.1685, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026006137211714063
+now it is 33400 steps  and the cls_loss is : tensor(0.1439, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026039880556902634
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.15017717805748101
+generate label finished(22.70/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 33450 steps  and the cls_loss is : tensor(0.1603, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002607350526955709
+now it is 33500 steps  and the cls_loss is : tensor(0.2135, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026107010931539602
+now it is 33550 steps  and the cls_loss is : tensor(0.1123, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026140397126192794
+now it is 33600 steps  and the cls_loss is : tensor(0.1703, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026173663438344903
+now it is 33650 steps  and the cls_loss is : tensor(0.1901, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002620680945431497
+now it is 33700 steps  and the cls_loss is : tensor(0.2289, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002623983476191798
+now it is 33750 steps  and the cls_loss is : tensor(0.1655, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002627273895046995
+now it is 33800 steps  and the cls_loss is : tensor(0.1038, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026305521610793087
+now it is 33850 steps  and the cls_loss is : tensor(0.1428, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026338182335220854
+now it is 33900 steps  and the cls_loss is : tensor(0.1948, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026370720717603015
+now it is 33950 steps  and the cls_loss is : tensor(0.1306, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002640313635331075
+now it is 34000 steps  and the cls_loss is : tensor(0.0895, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026435428839241618
+now it is 34050 steps  and the cls_loss is : tensor(0.2194, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00264675977738246
+now it is 34100 steps  and the cls_loss is : tensor(0.0570, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026499642757025106
+now it is 34150 steps  and the cls_loss is : tensor(0.1119, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002653156339034992
+now it is 34200 steps  and the cls_loss is : tensor(0.1389, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002656335927685218
+now it is 34250 steps  and the cls_loss is : tensor(0.1857, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002659503002113631
+now it is 34300 steps  and the cls_loss is : tensor(0.1974, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002662657522936291
+now it is 34350 steps  and the cls_loss is : tensor(0.1554, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002665799450925369
+now it is 34400 steps  and the cls_loss is : tensor(0.2108, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026689287470096344
+now it is 34450 steps  and the cls_loss is : tensor(0.1458, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002672045372274937
+now it is 34500 steps  and the cls_loss is : tensor(0.0809, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026751492879646963
+now it is 34550 steps  and the cls_loss is : tensor(0.0882, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026782404554803792
+now it is 34600 steps  and the cls_loss is : tensor(0.1888, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002681318836381983
+now it is 34650 steps  and the cls_loss is : tensor(0.1894, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026843843923885103
+now it is 34700 steps  and the cls_loss is : tensor(0.2018, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002687437085378449
+now it is 34750 steps  and the cls_loss is : tensor(0.2303, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002690476877390242
+now it is 34800 steps  and the cls_loss is : tensor(0.1007, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026935037306227635
+now it is 34850 steps  and the cls_loss is : tensor(0.1173, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026965176074357847
+now it is 34900 steps  and the cls_loss is : tensor(0.2127, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026995184703504462
+now it is 34950 steps  and the cls_loss is : tensor(0.1947, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027025062820497225
+now it is 35000 steps  and the cls_loss is : tensor(0.2152, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027054810053788814
+now it is 35050 steps  and the cls_loss is : tensor(0.1528, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027084426033459567
+now it is 35100 steps  and the cls_loss is : tensor(0.3190, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002711391039122195
+now it is 35150 steps  and the cls_loss is : tensor(0.1465, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002714326276042526
+now it is 35200 steps  and the cls_loss is : tensor(0.1567, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027172482776060105
+now it is 35250 steps  and the cls_loss is : tensor(0.1721, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027201570074762956
+now it is 35300 steps  and the cls_loss is : tensor(0.1585, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002723052429482069
+now it is 35350 steps  and the cls_loss is : tensor(0.1621, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002725934507617508
+now it is 35400 steps  and the cls_loss is : tensor(0.2503, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027288032060427255
+now it is 35450 steps  and the cls_loss is : tensor(0.1497, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027316584890842172
+now it is 35500 steps  and the cls_loss is : tensor(0.1690, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002734500321235306
+now it is 35550 steps  and the cls_loss is : tensor(0.1351, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00273732866715658
+now it is 35600 steps  and the cls_loss is : tensor(0.1182, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002740143491676337
+now it is 35650 steps  and the cls_loss is : tensor(0.1086, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027429447597910168
+now it is 35700 steps  and the cls_loss is : tensor(0.2275, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027457324366656414
+now it is 35750 steps  and the cls_loss is : tensor(0.1544, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002748506487634244
+now it is 35800 steps  and the cls_loss is : tensor(0.1249, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027512668782003033
+now it is 35850 steps  and the cls_loss is : tensor(0.2367, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002754013574037169
+now it is 35900 steps  and the cls_loss is : tensor(0.2446, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002756746540988493
+now it is 35950 steps  and the cls_loss is : tensor(0.1759, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002759465745068649
+now it is 36000 steps  and the cls_loss is : tensor(0.2391, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002762171152463162
+now it is 36050 steps  and the cls_loss is : tensor(0.1712, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027648627295291197
+now it is 36100 steps  and the cls_loss is : tensor(0.1277, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027675404427956
+now it is 36150 steps  and the cls_loss is : tensor(0.2120, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027702042589640816
+now it is 36200 steps  and the cls_loss is : tensor(0.1054, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002772854144908859
+now it is 36250 steps  and the cls_loss is : tensor(0.1461, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027754900676774568
+now it is 36300 steps  and the cls_loss is : tensor(0.2452, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027781119944910357
+now it is 36350 steps  and the cls_loss is : tensor(0.1191, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027807198927448035
+now it is 36400 steps  and the cls_loss is : tensor(0.1735, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027833137300084187
+now it is 36450 steps  and the cls_loss is : tensor(0.1256, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027858934740263956
+now it is 36500 steps  and the cls_loss is : tensor(0.1103, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027884590927185005
+now it is 36550 steps  and the cls_loss is : tensor(0.1446, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027910105541801592
+now it is 36600 steps  and the cls_loss is : tensor(0.2308, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002793547826682844
+now it is 36650 steps  and the cls_loss is : tensor(0.1795, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027960708786744764
+now it is 36700 steps  and the cls_loss is : tensor(0.1797, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002798579678779815
+now it is 36750 steps  and the cls_loss is : tensor(0.1642, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028010741958008466
+now it is 36800 steps  and the cls_loss is : tensor(0.1394, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002803554398717174
+now it is 36850 steps  and the cls_loss is : tensor(0.1954, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002806020256686403
+now it is 36900 steps  and the cls_loss is : tensor(0.1563, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028084717390445242
+now it is 36950 steps  and the cls_loss is : tensor(0.0916, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028109088153062955
+now it is 37000 steps  and the cls_loss is : tensor(0.1350, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002813331455165621
+now it is 37050 steps  and the cls_loss is : tensor(0.1759, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002815739628495927
+now it is 37100 steps  and the cls_loss is : tensor(0.1352, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028181333053505387
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.23000104827586615
+generate label finished(22.10/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.54, 0.52, 0.52
+bev  AP:6.64, 7.07, 7.07
+3d   AP:0.64, 0.63, 0.63
+aos  AP:0.48, 0.44, 0.44
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.54, 0.52, 0.52
+bev  AP:21.52, 24.21, 24.21
+3d   AP:12.17, 12.28, 12.28
+aos  AP:0.48, 0.44, 0.44
+
+now it is 37150 steps  and the cls_loss is : tensor(0.1846, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028205124559630497
+now it is 37200 steps  and the cls_loss is : tensor(0.2305, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002822877050747694
+now it is 37250 steps  and the cls_loss is : tensor(0.1824, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002825227060299715
+now it is 37300 steps  and the cls_loss is : tensor(0.1999, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028275624553957272
+now it is 37350 steps  and the cls_loss is : tensor(0.1871, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028298832069940856
+now it is 37400 steps  and the cls_loss is : tensor(0.1432, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00283218928623524
+now it is 37450 steps  and the cls_loss is : tensor(0.1790, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028344806644420998
+now it is 37500 steps  and the cls_loss is : tensor(0.1485, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028367573131203865
+now it is 37550 steps  and the cls_loss is : tensor(0.1051, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028390192039589907
+now it is 37600 steps  and the cls_loss is : tensor(0.1656, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028412663088303223
+now it is 37650 steps  and the cls_loss is : tensor(0.2183, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002843498599790662
+now it is 37700 steps  and the cls_loss is : tensor(0.1309, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002845716049080507
+now it is 37750 steps  and the cls_loss is : tensor(0.2294, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002847918629124917
+now it is 37800 steps  and the cls_loss is : tensor(0.2110, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002850106312533859
+now it is 37850 steps  and the cls_loss is : tensor(0.1325, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028522790721025432
+now it is 37900 steps  and the cls_loss is : tensor(0.1586, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002854436880811767
+now it is 37950 steps  and the cls_loss is : tensor(0.1461, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028565797118282462
+now it is 38000 steps  and the cls_loss is : tensor(0.1658, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028587075385049514
+now it is 38050 steps  and the cls_loss is : tensor(0.1515, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028608203343814392
+now it is 38100 steps  and the cls_loss is : tensor(0.1377, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00286291807318418
+now it is 38150 steps  and the cls_loss is : tensor(0.3559, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028650007288268846
+now it is 38200 steps  and the cls_loss is : tensor(0.2103, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028670682754108326
+now it is 38250 steps  and the cls_loss is : tensor(0.1431, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028691206872251867
+now it is 38300 steps  and the cls_loss is : tensor(0.1576, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028711579387473204
+now it is 38350 steps  and the cls_loss is : tensor(0.1430, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028731800046431313
+now it is 38400 steps  and the cls_loss is : tensor(0.1261, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028751868597673555
+now it is 38450 steps  and the cls_loss is : tensor(0.1055, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028771784791638833
+now it is 38500 steps  and the cls_loss is : tensor(0.1513, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002879154838066067
+now it is 38550 steps  and the cls_loss is : tensor(0.0760, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028811159118970297
+now it is 38600 steps  and the cls_loss is : tensor(0.1720, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028830616762699716
+now it is 38650 steps  and the cls_loss is : tensor(0.1513, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028849921069884718
+now it is 38700 steps  and the cls_loss is : tensor(0.1415, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00288690718004679
+now it is 38750 steps  and the cls_loss is : tensor(0.2060, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028888068716301663
+now it is 38800 steps  and the cls_loss is : tensor(0.2629, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028906911581151147
+now it is 38850 steps  and the cls_loss is : tensor(0.1392, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028925600160697187
+now it is 38900 steps  and the cls_loss is : tensor(0.1638, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002894413422253922
+now it is 38950 steps  and the cls_loss is : tensor(0.3184, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028962513536198186
+now it is 39000 steps  and the cls_loss is : tensor(0.1348, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028980737873119384
+now it is 39050 steps  and the cls_loss is : tensor(0.1546, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00289988070066753
+now it is 39100 steps  and the cls_loss is : tensor(0.1164, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029016720712168463
+now it is 39150 steps  and the cls_loss is : tensor(0.1677, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00290344787668342
+now it is 39200 steps  and the cls_loss is : tensor(0.2215, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029052080949843427
+now it is 39250 steps  and the cls_loss is : tensor(0.1160, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00290695270423054
+now it is 39300 steps  and the cls_loss is : tensor(0.2014, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002908681682727043
+now it is 39350 steps  and the cls_loss is : tensor(0.1109, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029103950089732554
+now it is 39400 steps  and the cls_loss is : tensor(0.2232, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029120926616632266
+now it is 39450 steps  and the cls_loss is : tensor(0.1665, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029137746196859116
+now it is 39500 steps  and the cls_loss is : tensor(0.2453, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029154408621254358
+now it is 39550 steps  and the cls_loss is : tensor(0.1778, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029170913682613543
+now it is 39600 steps  and the cls_loss is : tensor(0.1785, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029187261175689107
+now it is 39650 steps  and the cls_loss is : tensor(0.1821, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002920345089719291
+now it is 39700 steps  and the cls_loss is : tensor(0.1006, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002921948264579877
+now it is 39750 steps  and the cls_loss is : tensor(0.1463, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029235356222144975
+now it is 39800 steps  and the cls_loss is : tensor(0.2010, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029251071428836734
+now it is 39850 steps  and the cls_loss is : tensor(0.1570, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002926662807044867
+now it is 39900 steps  and the cls_loss is : tensor(0.1731, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029282025953527224
+now it is 39950 steps  and the cls_loss is : tensor(0.2172, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002929726488659307
+now it is 40000 steps  and the cls_loss is : tensor(0.1097, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029312344680143486
+now it is 40050 steps  and the cls_loss is : tensor(0.1241, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029327265146654726
+now it is 40100 steps  and the cls_loss is : tensor(0.1327, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002934202610058435
+now it is 40150 steps  and the cls_loss is : tensor(0.1242, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029356627358373515
+now it is 40200 steps  and the cls_loss is : tensor(0.1540, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002937106873844927
+now it is 40250 steps  and the cls_loss is : tensor(0.1640, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002938535006122682
+now it is 40300 steps  and the cls_loss is : tensor(0.1469, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029399471149111744
+now it is 40350 steps  and the cls_loss is : tensor(0.1794, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029413431826502212
+now it is 40400 steps  and the cls_loss is : tensor(0.1660, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029427231919791175
+now it is 40450 steps  and the cls_loss is : tensor(0.1390, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002944087125736851
+now it is 40500 steps  and the cls_loss is : tensor(0.1411, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029454349669623156
+now it is 40550 steps  and the cls_loss is : tensor(0.1303, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029467666988945243
+now it is 40600 steps  and the cls_loss is : tensor(0.1626, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029480823049728142
+now it is 40650 steps  and the cls_loss is : tensor(0.1865, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029493817688370566
+now it is 40700 steps  and the cls_loss is : tensor(0.1379, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029506650743278563
+now it is 40750 steps  and the cls_loss is : tensor(0.1577, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029519322054867548
+now it is 40800 steps  and the cls_loss is : tensor(0.1378, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029531831465564296
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.14979062941828777
+generate label finished(21.75/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 40850 steps  and the cls_loss is : tensor(0.1234, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002954417881980887
+now it is 40900 steps  and the cls_loss is : tensor(0.2805, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029556363964056602
+now it is 40950 steps  and the cls_loss is : tensor(0.1875, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029568386746779943
+now it is 41000 steps  and the cls_loss is : tensor(0.1858, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00295802470184704
+now it is 41050 steps  and the cls_loss is : tensor(0.1817, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029591944631640384
+now it is 41100 steps  and the cls_loss is : tensor(0.1349, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029603479440825004
+now it is 41150 steps  and the cls_loss is : tensor(0.0753, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029614851302583937
+now it is 41200 steps  and the cls_loss is : tensor(0.1603, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029626060075503163
+now it is 41250 steps  and the cls_loss is : tensor(0.1402, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029637105620196748
+now it is 41300 steps  and the cls_loss is : tensor(0.1019, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002964798779930858
+now it is 41350 steps  and the cls_loss is : tensor(0.1732, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029658706477514053
+now it is 41400 steps  and the cls_loss is : tensor(0.1970, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029669261521521775
+now it is 41450 steps  and the cls_loss is : tensor(0.1871, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029679652800075214
+now it is 41500 steps  and the cls_loss is : tensor(0.2338, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029689880183954333
+now it is 41550 steps  and the cls_loss is : tensor(0.1524, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029699943545977198
+now it is 41600 steps  and the cls_loss is : tensor(0.1725, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002970984276100155
+now it is 41650 steps  and the cls_loss is : tensor(0.2329, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029719577705926378
+now it is 41700 steps  and the cls_loss is : tensor(0.1745, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002972914825969343
+now it is 41750 steps  and the cls_loss is : tensor(0.2106, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002973855430328874
+now it is 41800 steps  and the cls_loss is : tensor(0.1367, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029747795719744096
+now it is 41850 steps  and the cls_loss is : tensor(0.1244, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002975687239413849
+now it is 41900 steps  and the cls_loss is : tensor(0.2422, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002976578421359955
+now it is 41950 steps  and the cls_loss is : tensor(0.2212, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029774531067304952
+now it is 42000 steps  and the cls_loss is : tensor(0.2133, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029783112846483795
+now it is 42050 steps  and the cls_loss is : tensor(0.1462, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002979152944441795
+now it is 42100 steps  and the cls_loss is : tensor(0.1920, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002979978075644338
+now it is 42150 steps  and the cls_loss is : tensor(0.1780, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029807866679951458
+now it is 42200 steps  and the cls_loss is : tensor(0.0980, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002981578711439023
+now it is 42250 steps  and the cls_loss is : tensor(0.1771, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002982354196126568
+now it is 42300 steps  and the cls_loss is : tensor(0.0711, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029831131124142926
+now it is 42350 steps  and the cls_loss is : tensor(0.1706, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002983855450864746
+now it is 42400 steps  and the cls_loss is : tensor(0.2698, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029845812022466275
+now it is 42450 steps  and the cls_loss is : tensor(0.1016, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029852903575349064
+now it is 42500 steps  and the cls_loss is : tensor(0.1799, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00298598290791093
+now it is 42550 steps  and the cls_loss is : tensor(0.1980, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029866588447625348
+now it is 42600 steps  and the cls_loss is : tensor(0.1715, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029873181596841544
+now it is 42650 steps  and the cls_loss is : tensor(0.1707, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029879608444769233
+now it is 42700 steps  and the cls_loss is : tensor(0.1573, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029885868911487777
+now it is 42750 steps  and the cls_loss is : tensor(0.0974, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002989196291914557
+now it is 42800 steps  and the cls_loss is : tensor(0.1583, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029897890391960996
+now it is 42850 steps  and the cls_loss is : tensor(0.2765, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029903651256223372
+now it is 42900 steps  and the cls_loss is : tensor(0.1744, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029909245440293856
+now it is 42950 steps  and the cls_loss is : tensor(0.1138, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002991467287460636
+now it is 43000 steps  and the cls_loss is : tensor(0.0946, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029919933491668388
+now it is 43050 steps  and the cls_loss is : tensor(0.1283, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029925027226061895
+now it is 43100 steps  and the cls_loss is : tensor(0.0821, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029929954014444094
+now it is 43150 steps  and the cls_loss is : tensor(0.2321, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002993471379554825
+now it is 43200 steps  and the cls_loss is : tensor(0.1312, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029939306510184415
+now it is 43250 steps  and the cls_loss is : tensor(0.1917, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029943732101240204
+now it is 43300 steps  and the cls_loss is : tensor(0.1284, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029947990513681487
+now it is 43350 steps  and the cls_loss is : tensor(0.1379, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002995208169455306
+now it is 43400 steps  and the cls_loss is : tensor(0.1867, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029956005592979324
+now it is 43450 steps  and the cls_loss is : tensor(0.2913, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029959762160164903
+now it is 43500 steps  and the cls_loss is : tensor(0.1397, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029963351349395263
+now it is 43550 steps  and the cls_loss is : tensor(0.1866, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029966773116037286
+now it is 43600 steps  and the cls_loss is : tensor(0.1692, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029970027417539824
+now it is 43650 steps  and the cls_loss is : tensor(0.1211, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029973114213434236
+now it is 43700 steps  and the cls_loss is : tensor(0.1269, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002997603346533488
+now it is 43750 steps  and the cls_loss is : tensor(0.1783, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029978785136939596
+now it is 43800 steps  and the cls_loss is : tensor(0.1600, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029981369194030157
+now it is 43850 steps  and the cls_loss is : tensor(0.0622, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00299837856044727
+now it is 43900 steps  and the cls_loss is : tensor(0.1833, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002998603433821812
+now it is 43950 steps  and the cls_loss is : tensor(0.0541, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029988115367302437
+now it is 44000 steps  and the cls_loss is : tensor(0.1853, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999002866584715
+now it is 44050 steps  and the cls_loss is : tensor(0.1481, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999177421005958
+now it is 44100 steps  and the cls_loss is : tensor(0.1265, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999335197823312
+now it is 44150 steps  and the cls_loss is : tensor(0.1766, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999476195074754
+now it is 44200 steps  and the cls_loss is : tensor(0.2088, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029996004110069228
+now it is 44250 steps  and the cls_loss is : tensor(0.1140, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029997078440751395
+now it is 44300 steps  and the cls_loss is : tensor(0.2882, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999798492943427
+now it is 44350 steps  and the cls_loss is : tensor(0.1612, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029998723564845283
+now it is 44400 steps  and the cls_loss is : tensor(0.2173, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999929433779918
+now it is 44450 steps  and the cls_loss is : tensor(0.1657, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999969724119815
+now it is 44500 steps  and the cls_loss is : tensor(0.2506, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029999932270031913
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.1632391496965415
+generate label finished(22.33/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 44550 steps  and the cls_loss is : tensor(0.1932, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029999999846259634
+now it is 44600 steps  and the cls_loss is : tensor(0.0990, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029999950105005046
+now it is 44650 steps  and the cls_loss is : tensor(0.1488, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999981746192828
+now it is 44700 steps  and the cls_loss is : tensor(0.1268, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999960191776243
+now it is 44750 steps  and the cls_loss is : tensor(0.1313, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029999303473698794
+now it is 44800 steps  and the cls_loss is : tensor(0.1245, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029998922131386817
+now it is 44850 steps  and the cls_loss is : tensor(0.1285, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029998457892934137
+now it is 44900 steps  and the cls_loss is : tensor(0.2258, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029997910760906524
+now it is 44950 steps  and the cls_loss is : tensor(0.1199, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029997280738327907
+now it is 45000 steps  and the cls_loss is : tensor(0.2133, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029996567828680333
+now it is 45050 steps  and the cls_loss is : tensor(0.1587, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999577203590395
+now it is 45100 steps  and the cls_loss is : tensor(0.1316, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999489336439701
+now it is 45150 steps  and the cls_loss is : tensor(0.1577, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029993931819015792
+now it is 45200 steps  and the cls_loss is : tensor(0.1800, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029992887405074636
+now it is 45250 steps  and the cls_loss is : tensor(0.1754, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999176012834587
+now it is 45300 steps  and the cls_loss is : tensor(0.1826, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002999054999505979
+now it is 45350 steps  and the cls_loss is : tensor(0.1400, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002998925701190464
+now it is 45400 steps  and the cls_loss is : tensor(0.1495, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029987881186026564
+now it is 45450 steps  and the cls_loss is : tensor(0.2038, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002998642252502956
+now it is 45500 steps  and the cls_loss is : tensor(0.2287, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029984881036975446
+now it is 45550 steps  and the cls_loss is : tensor(0.1342, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029983256730383807
+now it is 45600 steps  and the cls_loss is : tensor(0.1889, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002998154961423196
+now it is 45650 steps  and the cls_loss is : tensor(0.1982, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029979759697954917
+now it is 45700 steps  and the cls_loss is : tensor(0.1641, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002997788699144528
+now it is 45750 steps  and the cls_loss is : tensor(0.1502, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029975931505053246
+now it is 45800 steps  and the cls_loss is : tensor(0.1915, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002997389324958652
+now it is 45850 steps  and the cls_loss is : tensor(0.1761, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029971772236310253
+now it is 45900 steps  and the cls_loss is : tensor(0.0763, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029969568476947003
+now it is 45950 steps  and the cls_loss is : tensor(0.0889, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002996728198367663
+now it is 46000 steps  and the cls_loss is : tensor(0.1929, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029964912769136274
+now it is 46050 steps  and the cls_loss is : tensor(0.2212, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029962460846420253
+now it is 46100 steps  and the cls_loss is : tensor(0.1779, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002995992622908001
+now it is 46150 steps  and the cls_loss is : tensor(0.1864, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029957308931124024
+now it is 46200 steps  and the cls_loss is : tensor(0.0504, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029954608967017737
+now it is 46250 steps  and the cls_loss is : tensor(0.1498, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002995182635168347
+now it is 46300 steps  and the cls_loss is : tensor(0.1035, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029948961100500367
+now it is 46350 steps  and the cls_loss is : tensor(0.1278, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002994601322930427
+now it is 46400 steps  and the cls_loss is : tensor(0.1422, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002994298275438766
+now it is 46450 steps  and the cls_loss is : tensor(0.1776, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029939869692499543
+now it is 46500 steps  and the cls_loss is : tensor(0.1427, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002993667406084539
+now it is 46550 steps  and the cls_loss is : tensor(0.1472, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002993339587708701
+now it is 46600 steps  and the cls_loss is : tensor(0.1534, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002993003515934248
+now it is 46650 steps  and the cls_loss is : tensor(0.1486, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029926591926186016
+now it is 46700 steps  and the cls_loss is : tensor(0.1127, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029923066196647892
+now it is 46750 steps  and the cls_loss is : tensor(0.1731, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029919457990214334
+now it is 46800 steps  and the cls_loss is : tensor(0.1711, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029915767326827393
+now it is 46850 steps  and the cls_loss is : tensor(0.1094, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002991199422688486
+now it is 46900 steps  and the cls_loss is : tensor(0.2487, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002990813871124014
+now it is 46950 steps  and the cls_loss is : tensor(0.1307, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029904200801202123
+now it is 47000 steps  and the cls_loss is : tensor(0.2439, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029900180518535107
+now it is 47050 steps  and the cls_loss is : tensor(0.1587, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029896077885458636
+now it is 47100 steps  and the cls_loss is : tensor(0.1212, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029891892924647392
+now it is 47150 steps  and the cls_loss is : tensor(0.1130, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029887625659231077
+now it is 47200 steps  and the cls_loss is : tensor(0.2017, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002988327611279428
+now it is 47250 steps  and the cls_loss is : tensor(0.1263, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002987884430937634
+now it is 47300 steps  and the cls_loss is : tensor(0.1531, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029874330273471222
+now it is 47350 steps  and the cls_loss is : tensor(0.1937, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002986973403002738
+now it is 47400 steps  and the cls_loss is : tensor(0.2187, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002986505560444762
+now it is 47450 steps  and the cls_loss is : tensor(0.1301, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002986029502258895
+now it is 47500 steps  and the cls_loss is : tensor(0.1438, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002985545231076245
+now it is 47550 steps  and the cls_loss is : tensor(0.1647, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002985052749573312
+now it is 47600 steps  and the cls_loss is : tensor(0.2137, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029845520604719726
+now it is 47650 steps  and the cls_loss is : tensor(0.1460, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029840431665394667
+now it is 47700 steps  and the cls_loss is : tensor(0.2829, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002983526070588381
+now it is 47750 steps  and the cls_loss is : tensor(0.1834, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002983000775476633
+now it is 47800 steps  and the cls_loss is : tensor(0.2106, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029824672841074562
+now it is 47850 steps  and the cls_loss is : tensor(0.1166, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029819255994293845
+now it is 47900 steps  and the cls_loss is : tensor(0.1515, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029813757244362333
+now it is 47950 steps  and the cls_loss is : tensor(0.1857, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029808176621670857
+now it is 48000 steps  and the cls_loss is : tensor(0.1804, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029802514157062756
+now it is 48050 steps  and the cls_loss is : tensor(0.2182, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029796769881833686
+now it is 48100 steps  and the cls_loss is : tensor(0.1914, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002979094382773146
+now it is 48150 steps  and the cls_loss is : tensor(0.2061, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029785036026955874
+now it is 48200 steps  and the cls_loss is : tensor(0.1772, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002977904651215853
+now it is 48250 steps  and the cls_loss is : tensor(0.2065, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002977297531644265
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.14957535248525614
+generate label finished(22.23/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 48300 steps  and the cls_loss is : tensor(0.1048, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029766822473362886
+now it is 48350 steps  and the cls_loss is : tensor(0.1107, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002976058801692516
+now it is 48400 steps  and the cls_loss is : tensor(0.1895, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029754271981586445
+now it is 48450 steps  and the cls_loss is : tensor(0.1864, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029747874402254603
+now it is 48500 steps  and the cls_loss is : tensor(0.1075, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002974139531428816
+now it is 48550 steps  and the cls_loss is : tensor(0.1395, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029734834753496154
+now it is 48600 steps  and the cls_loss is : tensor(0.1603, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029728192756137894
+now it is 48650 steps  and the cls_loss is : tensor(0.0754, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029721469358922775
+now it is 48700 steps  and the cls_loss is : tensor(0.1428, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029714664599010086
+now it is 48750 steps  and the cls_loss is : tensor(0.1531, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029707778514008803
+now it is 48800 steps  and the cls_loss is : tensor(0.1917, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029700811141977358
+now it is 48850 steps  and the cls_loss is : tensor(0.1921, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029693762521423458
+now it is 48900 steps  and the cls_loss is : tensor(0.1307, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002968663269130385
+now it is 48950 steps  and the cls_loss is : tensor(0.1824, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002967942169102413
+now it is 49000 steps  and the cls_loss is : tensor(0.1974, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029672129560438486
+now it is 49050 steps  and the cls_loss is : tensor(0.1352, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002966475633984953
+now it is 49100 steps  and the cls_loss is : tensor(0.1141, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002965730207000803
+now it is 49150 steps  and the cls_loss is : tensor(0.2381, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00296497667921127
+now it is 49200 steps  and the cls_loss is : tensor(0.2497, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029642150547809984
+now it is 49250 steps  and the cls_loss is : tensor(0.1912, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002963445337919381
+now it is 49300 steps  and the cls_loss is : tensor(0.1486, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002962667532880537
+now it is 49350 steps  and the cls_loss is : tensor(0.1594, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029618816439632868
+now it is 49400 steps  and the cls_loss is : tensor(0.1740, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029610876755111304
+now it is 49450 steps  and the cls_loss is : tensor(0.1517, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029602856319122213
+now it is 49500 steps  and the cls_loss is : tensor(0.1842, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002959475517599344
+now it is 49550 steps  and the cls_loss is : tensor(0.2020, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002958657337049888
+now it is 49600 steps  and the cls_loss is : tensor(0.1884, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029578310947858248
+now it is 49650 steps  and the cls_loss is : tensor(0.2173, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002956996795373681
+now it is 49700 steps  and the cls_loss is : tensor(0.2030, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029561544434245136
+now it is 49750 steps  and the cls_loss is : tensor(0.0966, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002955304043593886
+now it is 49800 steps  and the cls_loss is : tensor(0.1963, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029544456005818408
+now it is 49850 steps  and the cls_loss is : tensor(0.1554, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029535791191328733
+now it is 49900 steps  and the cls_loss is : tensor(0.1160, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002952704604035907
+now it is 49950 steps  and the cls_loss is : tensor(0.1959, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029518220601242665
+now it is 50000 steps  and the cls_loss is : tensor(0.1895, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029509314922756495
+now it is 50050 steps  and the cls_loss is : tensor(0.1923, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002950032905412101
+now it is 50100 steps  and the cls_loss is : tensor(0.1407, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029491263044999884
+now it is 50150 steps  and the cls_loss is : tensor(0.2350, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002948211694549967
+now it is 50200 steps  and the cls_loss is : tensor(0.1398, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002947289080616962
+now it is 50250 steps  and the cls_loss is : tensor(0.1601, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029463584678001316
+now it is 50300 steps  and the cls_loss is : tensor(0.1574, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002945419861242845
+now it is 50350 steps  and the cls_loss is : tensor(0.2699, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002944473266132651
+now it is 50400 steps  and the cls_loss is : tensor(0.1257, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029435186877012497
+now it is 50450 steps  and the cls_loss is : tensor(0.0637, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029425561312244643
+now it is 50500 steps  and the cls_loss is : tensor(0.1678, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029415856020222116
+now it is 50550 steps  and the cls_loss is : tensor(0.1420, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002940607105458472
+now it is 50600 steps  and the cls_loss is : tensor(0.1586, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029396206469412614
+now it is 50650 steps  and the cls_loss is : tensor(0.1143, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002938626231922599
+now it is 50700 steps  and the cls_loss is : tensor(0.2443, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00293762386589848
+now it is 50750 steps  and the cls_loss is : tensor(0.0652, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002936613554408843
+now it is 50800 steps  and the cls_loss is : tensor(0.1688, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029355953030375387
+now it is 50850 steps  and the cls_loss is : tensor(0.1542, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029345691174123036
+now it is 50900 steps  and the cls_loss is : tensor(0.2079, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029335350032047226
+now it is 50950 steps  and the cls_loss is : tensor(0.1356, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029324929661302024
+now it is 51000 steps  and the cls_loss is : tensor(0.1250, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002931443011947938
+now it is 51050 steps  and the cls_loss is : tensor(0.2381, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029303851464608814
+now it is 51100 steps  and the cls_loss is : tensor(0.1186, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029293193755157085
+now it is 51150 steps  and the cls_loss is : tensor(0.2004, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002928245705002788
+now it is 51200 steps  and the cls_loss is : tensor(0.1229, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002927164140856149
+now it is 51250 steps  and the cls_loss is : tensor(0.1403, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002926074689053447
+now it is 51300 steps  and the cls_loss is : tensor(0.1043, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029249773556159313
+now it is 51350 steps  and the cls_loss is : tensor(0.1116, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002923872146608412
+now it is 51400 steps  and the cls_loss is : tensor(0.0838, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002922759068139228
+now it is 51450 steps  and the cls_loss is : tensor(0.1225, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002921638126360208
+now it is 51500 steps  and the cls_loss is : tensor(0.2811, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029205093274666445
+now it is 51550 steps  and the cls_loss is : tensor(0.1723, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029193726776972516
+now it is 51600 steps  and the cls_loss is : tensor(0.1566, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002918228183334136
+now it is 51650 steps  and the cls_loss is : tensor(0.2172, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029170758507027603
+now it is 51700 steps  and the cls_loss is : tensor(0.1244, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029159156861719077
+now it is 51750 steps  and the cls_loss is : tensor(0.1978, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002914747696153646
+now it is 51800 steps  and the cls_loss is : tensor(0.2397, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002913571887103297
+now it is 51850 steps  and the cls_loss is : tensor(0.2138, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002912388265519392
+now it is 51900 steps  and the cls_loss is : tensor(0.1388, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029111968379436468
+now it is 51950 steps  and the cls_loss is : tensor(0.1303, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002909997610960915
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.1487234591177513
+generate label finished(22.44/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 52000 steps  and the cls_loss is : tensor(0.1065, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029087905911991596
+now it is 52050 steps  and the cls_loss is : tensor(0.1692, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029075757853294112
+now it is 52100 steps  and the cls_loss is : tensor(0.1704, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029063532000657352
+now it is 52150 steps  and the cls_loss is : tensor(0.1166, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00290512284216519
+now it is 52200 steps  and the cls_loss is : tensor(0.1317, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0029038847184277945
+now it is 52250 steps  and the cls_loss is : tensor(0.2245, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002902638835696488
+now it is 52300 steps  and the cls_loss is : tensor(0.1203, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002901385200857091
+now it is 52350 steps  and the cls_loss is : tensor(0.2328, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002900123820838271
+now it is 52400 steps  and the cls_loss is : tensor(0.2669, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028988547026115013
+now it is 52450 steps  and the cls_loss is : tensor(0.1441, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028975778531910227
+now it is 52500 steps  and the cls_loss is : tensor(0.0682, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028962932796338047
+now it is 52550 steps  and the cls_loss is : tensor(0.1016, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002895000989039509
+now it is 52600 steps  and the cls_loss is : tensor(0.2060, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002893700988550447
+now it is 52650 steps  and the cls_loss is : tensor(0.0944, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002892393285351542
+now it is 52700 steps  and the cls_loss is : tensor(0.0807, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028910778866702877
+now it is 52750 steps  and the cls_loss is : tensor(0.1877, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028897547997767123
+now it is 52800 steps  and the cls_loss is : tensor(0.2296, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002888424031983333
+now it is 52850 steps  and the cls_loss is : tensor(0.2605, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028870855906451207
+now it is 52900 steps  and the cls_loss is : tensor(0.1636, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002885739483159455
+now it is 52950 steps  and the cls_loss is : tensor(0.2102, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002884385716966087
+now it is 53000 steps  and the cls_loss is : tensor(0.1878, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028830242995470934
+now it is 53050 steps  and the cls_loss is : tensor(0.1585, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002881655238426843
+now it is 53100 steps  and the cls_loss is : tensor(0.2496, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002880278541171945
+now it is 53150 steps  and the cls_loss is : tensor(0.1807, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028788942153912156
+now it is 53200 steps  and the cls_loss is : tensor(0.0965, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028775022687356332
+now it is 53250 steps  and the cls_loss is : tensor(0.1687, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028761027088982935
+now it is 53300 steps  and the cls_loss is : tensor(0.0926, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002874695543614371
+now it is 53350 steps  and the cls_loss is : tensor(0.1547, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028732807806610733
+now it is 53400 steps  and the cls_loss is : tensor(0.1517, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028718584278576006
+now it is 53450 steps  and the cls_loss is : tensor(0.1752, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028704284930650996
+now it is 53500 steps  and the cls_loss is : tensor(0.3034, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028689909841866225
+now it is 53550 steps  and the cls_loss is : tensor(0.1924, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002867545909167082
+now it is 53600 steps  and the cls_loss is : tensor(0.2048, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002866093275993209
+now it is 53650 steps  and the cls_loss is : tensor(0.1049, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028646330926935053
+now it is 53700 steps  and the cls_loss is : tensor(0.0543, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002863165367338203
+now it is 53750 steps  and the cls_loss is : tensor(0.1625, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028616901080392174
+now it is 53800 steps  and the cls_loss is : tensor(0.2181, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002860207322950102
+now it is 53850 steps  and the cls_loss is : tensor(0.1432, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002858717020266006
+now it is 53900 steps  and the cls_loss is : tensor(0.1507, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002857219208223626
+now it is 53950 steps  and the cls_loss is : tensor(0.1946, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002855713895101162
+now it is 54000 steps  and the cls_loss is : tensor(0.1848, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002854201089218273
+now it is 54050 steps  and the cls_loss is : tensor(0.1298, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002852680798936027
+now it is 54100 steps  and the cls_loss is : tensor(0.1414, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028511530326568576
+now it is 54150 steps  and the cls_loss is : tensor(0.1873, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00284961779882452
+now it is 54200 steps  and the cls_loss is : tensor(0.1372, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002848075105924037
+now it is 54250 steps  and the cls_loss is : tensor(0.1835, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028465249624816617
+now it is 54300 steps  and the cls_loss is : tensor(0.1017, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002844967377064821
+now it is 54350 steps  and the cls_loss is : tensor(0.0866, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028434023582820747
+now it is 54400 steps  and the cls_loss is : tensor(0.1321, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002841829914783066
+now it is 54450 steps  and the cls_loss is : tensor(0.1026, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028402500552584717
+now it is 54500 steps  and the cls_loss is : tensor(0.1507, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028386627884399583
+now it is 54550 steps  and the cls_loss is : tensor(0.1942, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028370681231001302
+now it is 54600 steps  and the cls_loss is : tensor(0.2144, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028354660680524816
+now it is 54650 steps  and the cls_loss is : tensor(0.2136, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028338566321513495
+now it is 54700 steps  and the cls_loss is : tensor(0.1892, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028322398242918647
+now it is 54750 steps  and the cls_loss is : tensor(0.1510, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028306156534099
+now it is 54800 steps  and the cls_loss is : tensor(0.1489, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028289841284820233
+now it is 54850 steps  and the cls_loss is : tensor(0.1633, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002827345258525448
+now it is 54900 steps  and the cls_loss is : tensor(0.1335, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028256990525979825
+now it is 54950 steps  and the cls_loss is : tensor(0.1364, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028240455197979784
+now it is 55000 steps  and the cls_loss is : tensor(0.1492, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002822384669264284
+now it is 55050 steps  and the cls_loss is : tensor(0.1907, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028207165101761895
+now it is 55100 steps  and the cls_loss is : tensor(0.2181, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002819041051753381
+now it is 55150 steps  and the cls_loss is : tensor(0.1339, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028173583032558847
+now it is 55200 steps  and the cls_loss is : tensor(0.1748, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028156682739840203
+now it is 55250 steps  and the cls_loss is : tensor(0.1956, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002813970973278345
+now it is 55300 steps  and the cls_loss is : tensor(0.1784, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002812266410519606
+now it is 55350 steps  and the cls_loss is : tensor(0.1902, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002810554595128685
+now it is 55400 steps  and the cls_loss is : tensor(0.1619, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028088355365665507
+now it is 55450 steps  and the cls_loss is : tensor(0.2244, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002807109244334202
+now it is 55500 steps  and the cls_loss is : tensor(0.1961, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002805375727972617
+now it is 55550 steps  and the cls_loss is : tensor(0.1362, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0028036349970627004
+now it is 55600 steps  and the cls_loss is : tensor(0.1624, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002801887061225233
+now it is 55650 steps  and the cls_loss is : tensor(0.1090, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002800131930120814
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.16118243199041782
+generate label finished(22.54/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 55700 steps  and the cls_loss is : tensor(0.1076, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002798369613449811
+now it is 55750 steps  and the cls_loss is : tensor(0.2015, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002796600120952304
+now it is 55800 steps  and the cls_loss is : tensor(0.1501, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027948234624080343
+now it is 55850 steps  and the cls_loss is : tensor(0.1055, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027930396476363475
+now it is 55900 steps  and the cls_loss is : tensor(0.1414, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027912486864961417
+now it is 55950 steps  and the cls_loss is : tensor(0.2010, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027894505888858123
+now it is 56000 steps  and the cls_loss is : tensor(0.1432, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027876453647431958
+now it is 56050 steps  and the cls_loss is : tensor(0.1688, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002785833024045516
+now it is 56100 steps  and the cls_loss is : tensor(0.1765, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027840135768093304
+now it is 56150 steps  and the cls_loss is : tensor(0.1836, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002782187033090473
+now it is 56200 steps  and the cls_loss is : tensor(0.1106, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027803534029839975
+now it is 56250 steps  and the cls_loss is : tensor(0.2463, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027785126966241246
+now it is 56300 steps  and the cls_loss is : tensor(0.2317, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002776664924184184
+now it is 56350 steps  and the cls_loss is : tensor(0.0933, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002774810095876559
+now it is 56400 steps  and the cls_loss is : tensor(0.1716, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027729482219526285
+now it is 56450 steps  and the cls_loss is : tensor(0.1238, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002771079312702714
+now it is 56500 steps  and the cls_loss is : tensor(0.1549, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027692033784560174
+now it is 56550 steps  and the cls_loss is : tensor(0.2229, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027673204295805684
+now it is 56600 steps  and the cls_loss is : tensor(0.2084, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002765430476483166
+now it is 56650 steps  and the cls_loss is : tensor(0.2133, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002763533529609319
+now it is 56700 steps  and the cls_loss is : tensor(0.2008, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027616295994431907
+now it is 56750 steps  and the cls_loss is : tensor(0.0750, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002759718696507541
+now it is 56800 steps  and the cls_loss is : tensor(0.0897, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027578008313636653
+now it is 56850 steps  and the cls_loss is : tensor(0.1229, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027558760146113403
+now it is 56900 steps  and the cls_loss is : tensor(0.2350, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002753944256888761
+now it is 56950 steps  and the cls_loss is : tensor(0.0921, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002752005568872487
+now it is 57000 steps  and the cls_loss is : tensor(0.1545, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027500599612773785
+now it is 57050 steps  and the cls_loss is : tensor(0.1939, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027481074448565397
+now it is 57100 steps  and the cls_loss is : tensor(0.1666, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027461480304012587
+now it is 57150 steps  and the cls_loss is : tensor(0.2120, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027441817287409487
+now it is 57200 steps  and the cls_loss is : tensor(0.1816, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002742208550743088
+now it is 57250 steps  and the cls_loss is : tensor(0.1799, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002740228507313159
+now it is 57300 steps  and the cls_loss is : tensor(0.1881, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002738241609394587
+now it is 57350 steps  and the cls_loss is : tensor(0.1412, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002736247867968683
+now it is 57400 steps  and the cls_loss is : tensor(0.2014, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027342472940545797
+now it is 57450 steps  and the cls_loss is : tensor(0.1682, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002732239898709174
+now it is 57500 steps  and the cls_loss is : tensor(0.1717, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027302256930270617
+now it is 57550 steps  and the cls_loss is : tensor(0.1649, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00272820468814048
+now it is 57600 steps  and the cls_loss is : tensor(0.1517, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027261768952192428
+now it is 57650 steps  and the cls_loss is : tensor(0.1307, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027241423254706822
+now it is 57700 steps  and the cls_loss is : tensor(0.1005, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027221009901395835
+now it is 57750 steps  and the cls_loss is : tensor(0.1586, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027200529005081257
+now it is 57800 steps  and the cls_loss is : tensor(0.2183, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002717998067895817
+now it is 57850 steps  and the cls_loss is : tensor(0.1348, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002715936503659433
+now it is 57900 steps  and the cls_loss is : tensor(0.1873, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027138682191929554
+now it is 57950 steps  and the cls_loss is : tensor(0.1292, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027117932259275055
+now it is 58000 steps  and the cls_loss is : tensor(0.1195, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027097115353312846
+now it is 58050 steps  and the cls_loss is : tensor(0.1569, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.00270762315890951
+now it is 58100 steps  and the cls_loss is : tensor(0.1874, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0027055281082043483
+now it is 58150 steps  and the cls_loss is : tensor(0.1741, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002703426394794857
+now it is 58200 steps  and the cls_loss is : tensor(0.1246, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002701318030296914
+now it is 58250 steps  and the cls_loss is : tensor(0.2043, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026992030263631598
+now it is 58300 steps  and the cls_loss is : tensor(0.1522, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026970813946829287
+now it is 58350 steps  and the cls_loss is : tensor(0.1544, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026949531469821855
+now it is 58400 steps  and the cls_loss is : tensor(0.0704, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026928182950234614
+now it is 58450 steps  and the cls_loss is : tensor(0.1276, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026906768506057884
+now it is 58500 steps  and the cls_loss is : tensor(0.1416, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026885288255646335
+now it is 58550 steps  and the cls_loss is : tensor(0.1477, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026863742317718353
+now it is 58600 steps  and the cls_loss is : tensor(0.1844, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002684213081135535
+now it is 58650 steps  and the cls_loss is : tensor(0.1368, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002682045385600114
+now it is 58700 steps  and the cls_loss is : tensor(0.0987, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026798711571461263
+now it is 58750 steps  and the cls_loss is : tensor(0.1718, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026776904077902316
+now it is 58800 steps  and the cls_loss is : tensor(0.1460, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002675503149585131
+now it is 58850 steps  and the cls_loss is : tensor(0.1342, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026733093946194977
+now it is 58900 steps  and the cls_loss is : tensor(0.1958, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026711091550179126
+now it is 58950 steps  and the cls_loss is : tensor(0.2346, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026689024429407964
+now it is 59000 steps  and the cls_loss is : tensor(0.1445, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026666892705843413
+now it is 59050 steps  and the cls_loss is : tensor(0.1338, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026644696501804455
+now it is 59100 steps  and the cls_loss is : tensor(0.3260, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026622435939966447
+now it is 59150 steps  and the cls_loss is : tensor(0.1943, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026600111143360436
+now it is 59200 steps  and the cls_loss is : tensor(0.1686, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002657772223537248
+now it is 59250 steps  and the cls_loss is : tensor(0.1465, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026555269339742986
+now it is 59300 steps  and the cls_loss is : tensor(0.1160, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026532752580566013
+now it is 59350 steps  and the cls_loss is : tensor(0.2329, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026510172082288568
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.15048665345601325
+generate label finished(22.63/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 59400 steps  and the cls_loss is : tensor(0.2286, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026487527969709956
+now it is 59450 steps  and the cls_loss is : tensor(0.2340, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002646482036798105
+now it is 59500 steps  and the cls_loss is : tensor(0.2083, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002644204940260363
+now it is 59550 steps  and the cls_loss is : tensor(0.0239, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002641921519942968
+now it is 59600 steps  and the cls_loss is : tensor(0.1904, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026396317884660675
+now it is 59650 steps  and the cls_loss is : tensor(0.1469, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026373357584846924
+now it is 59700 steps  and the cls_loss is : tensor(0.2510, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026350334426886823
+now it is 59750 steps  and the cls_loss is : tensor(0.1375, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002632724853802619
+now it is 59800 steps  and the cls_loss is : tensor(0.2515, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002630410004585754
+now it is 59850 steps  and the cls_loss is : tensor(0.1149, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026280889078319396
+now it is 59900 steps  and the cls_loss is : tensor(0.1216, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002625761576369556
+now it is 59950 steps  and the cls_loss is : tensor(0.1291, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002623428023061444
+now it is 60000 steps  and the cls_loss is : tensor(0.1902, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026210882608048293
+now it is 60050 steps  and the cls_loss is : tensor(0.1164, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002618742302531255
+now it is 60100 steps  and the cls_loss is : tensor(0.1908, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002616390161206508
+now it is 60150 steps  and the cls_loss is : tensor(0.1792, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026140318498305485
+now it is 60200 steps  and the cls_loss is : tensor(0.1422, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026116673814374387
+now it is 60250 steps  and the cls_loss is : tensor(0.1618, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026092967690952676
+now it is 60300 steps  and the cls_loss is : tensor(0.1209, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002606920025906082
+now it is 60350 steps  and the cls_loss is : tensor(0.1504, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026045371650058142
+now it is 60400 steps  and the cls_loss is : tensor(0.1162, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0026021481995642066
+now it is 60450 steps  and the cls_loss is : tensor(0.1851, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002599753142784741
+now it is 60500 steps  and the cls_loss is : tensor(0.1195, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002597352007904565
+now it is 60550 steps  and the cls_loss is : tensor(0.2711, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025949448081944203
+now it is 60600 steps  and the cls_loss is : tensor(0.0951, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002592531556958567
+now it is 60650 steps  and the cls_loss is : tensor(0.1755, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025901122675347104
+now it is 60700 steps  and the cls_loss is : tensor(0.1493, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025876869532939295
+now it is 60750 steps  and the cls_loss is : tensor(0.1682, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025852556276406012
+now it is 60800 steps  and the cls_loss is : tensor(0.1587, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025828183040123263
+now it is 60850 steps  and the cls_loss is : tensor(0.1552, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002580374995879856
+now it is 60900 steps  and the cls_loss is : tensor(0.1594, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002577925716747016
+now it is 60950 steps  and the cls_loss is : tensor(0.2451, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002575470480150635
+now it is 61000 steps  and the cls_loss is : tensor(0.1354, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002573009299660465
+now it is 61050 steps  and the cls_loss is : tensor(0.3121, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025705421888791114
+now it is 61100 steps  and the cls_loss is : tensor(0.1246, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002568069161441955
+now it is 61150 steps  and the cls_loss is : tensor(0.1704, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002565590231017076
+now it is 61200 steps  and the cls_loss is : tensor(0.1284, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025631054113051804
+now it is 61250 steps  and the cls_loss is : tensor(0.1337, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002560614716039524
+now it is 61300 steps  and the cls_loss is : tensor(0.1842, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002558118158985835
+now it is 61350 steps  and the cls_loss is : tensor(0.1643, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025556157539422396
+now it is 61400 steps  and the cls_loss is : tensor(0.1362, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002553107514739185
+now it is 61450 steps  and the cls_loss is : tensor(0.0792, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025505934552393626
+now it is 61500 steps  and the cls_loss is : tensor(0.2285, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025480735893376313
+now it is 61550 steps  and the cls_loss is : tensor(0.0829, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002545547930960942
+now it is 61600 steps  and the cls_loss is : tensor(0.2301, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025430164940682606
+now it is 61650 steps  and the cls_loss is : tensor(0.2108, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002540479292650487
+now it is 61700 steps  and the cls_loss is : tensor(0.1527, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025379363407303855
+now it is 61750 steps  and the cls_loss is : tensor(0.2030, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025353876523624983
+now it is 61800 steps  and the cls_loss is : tensor(0.1763, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002532833241633075
+now it is 61850 steps  and the cls_loss is : tensor(0.1861, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025302731226599894
+now it is 61900 steps  and the cls_loss is : tensor(0.2740, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025277073095926667
+now it is 61950 steps  and the cls_loss is : tensor(0.1688, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025251358166120006
+now it is 62000 steps  and the cls_loss is : tensor(0.1241, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002522558657930278
+now it is 62050 steps  and the cls_loss is : tensor(0.1314, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025199758477910976
+now it is 62100 steps  and the cls_loss is : tensor(0.2023, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002517387400469296
+now it is 62150 steps  and the cls_loss is : tensor(0.1849, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025147933302708623
+now it is 62200 steps  and the cls_loss is : tensor(0.1732, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002512193651532866
+now it is 62250 steps  and the cls_loss is : tensor(0.1503, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025095883786233706
+now it is 62300 steps  and the cls_loss is : tensor(0.1447, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025069775259413604
+now it is 62350 steps  and the cls_loss is : tensor(0.1018, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002504361107916657
+now it is 62400 steps  and the cls_loss is : tensor(0.1717, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0025017391390098416
+now it is 62450 steps  and the cls_loss is : tensor(0.1397, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002499111633712175
+now it is 62500 steps  and the cls_loss is : tensor(0.1317, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024964786065455142
+now it is 62550 steps  and the cls_loss is : tensor(0.1649, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024938400720622375
+now it is 62600 steps  and the cls_loss is : tensor(0.1596, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024911960448451603
+now it is 62650 steps  and the cls_loss is : tensor(0.1391, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024885465395074564
+now it is 62700 steps  and the cls_loss is : tensor(0.0868, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024858915706925753
+now it is 62750 steps  and the cls_loss is : tensor(0.1568, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024832311530741625
+now it is 62800 steps  and the cls_loss is : tensor(0.1811, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002480565301355979
+now it is 62850 steps  and the cls_loss is : tensor(0.1981, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024778940302718194
+now it is 62900 steps  and the cls_loss is : tensor(0.2229, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024752173545854288
+now it is 62950 steps  and the cls_loss is : tensor(0.1554, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002472535289090425
+now it is 63000 steps  and the cls_loss is : tensor(0.1136, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024698478486102123
+now it is 63050 steps  and the cls_loss is : tensor(0.1419, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024671550479979042
+now it is 63100 steps  and the cls_loss is : tensor(0.1149, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002464456902136237
+#################################
+# EVAL
+#################################
+Generate output labels...
+validation_loss: 0.1538328009036483
+generate label finished(21.67/s). start eval:
+Car AP@0.70, 0.70, 0.70:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+Car AP@0.70, 0.50, 0.50:
+bbox AP:0.00, 0.00, 0.00
+bev  AP:0.00, 0.00, 0.00
+3d   AP:0.00, 0.00, 0.00
+
+now it is 63150 steps  and the cls_loss is : tensor(0.2347, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024617534259374903
+now it is 63200 steps  and the cls_loss is : tensor(0.1881, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002459044634343404
+now it is 63250 steps  and the cls_loss is : tensor(0.1144, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024563305423250933
+now it is 63300 steps  and the cls_loss is : tensor(0.2475, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024536111648829724
+now it is 63350 steps  and the cls_loss is : tensor(0.1237, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024508865170466626
+now it is 63400 steps  and the cls_loss is : tensor(0.1436, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024481566138749166
+now it is 63450 steps  and the cls_loss is : tensor(0.1118, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024454214704555323
+now it is 63500 steps  and the cls_loss is : tensor(0.1431, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024426811019052697
+now it is 63550 steps  and the cls_loss is : tensor(0.2355, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024399355233697675
+now it is 63600 steps  and the cls_loss is : tensor(0.1291, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002437184750023458
+now it is 63650 steps  and the cls_loss is : tensor(0.0966, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024344287970694857
+now it is 63700 steps  and the cls_loss is : tensor(0.0923, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024316676797396224
+now it is 63750 steps  and the cls_loss is : tensor(0.1457, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024289014132941817
+now it is 63800 steps  and the cls_loss is : tensor(0.2347, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002426130013021936
+now it is 63850 steps  and the cls_loss is : tensor(0.1449, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024233534942400318
+now it is 63900 steps  and the cls_loss is : tensor(0.1741, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024205718722939053
+now it is 63950 steps  and the cls_loss is : tensor(0.1445, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002417785162557196
+now it is 64000 steps  and the cls_loss is : tensor(0.2241, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002414993380431664
+now it is 64050 steps  and the cls_loss is : tensor(0.1362, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002412196541347103
+now it is 64100 steps  and the cls_loss is : tensor(0.1256, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024093946607612565
+now it is 64150 steps  and the cls_loss is : tensor(0.1132, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024065877541597325
+now it is 64200 steps  and the cls_loss is : tensor(0.1792, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024037758370559137
+now it is 64250 steps  and the cls_loss is : tensor(0.2203, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0024009589249908794
+now it is 64300 steps  and the cls_loss is : tensor(0.1486, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023981370335333127
+now it is 64350 steps  and the cls_loss is : tensor(0.1462, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023953101782794176
+now it is 64400 steps  and the cls_loss is : tensor(0.1354, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023924783748528323
+now it is 64450 steps  and the cls_loss is : tensor(0.1980, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023896416389045444
+now it is 64500 steps  and the cls_loss is : tensor(0.1331, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002386799986112801
+now it is 64550 steps  and the cls_loss is : tensor(0.1575, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023839534321830236
+now it is 64600 steps  and the cls_loss is : tensor(0.1291, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002381101992847724
+now it is 64650 steps  and the cls_loss is : tensor(0.0892, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023782456838664116
+now it is 64700 steps  and the cls_loss is : tensor(0.1561, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002375384521025513
+now it is 64750 steps  and the cls_loss is : tensor(0.1698, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023725185201382798
+now it is 64800 steps  and the cls_loss is : tensor(0.2293, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023696476970447027
+now it is 64850 steps  and the cls_loss is : tensor(0.1561, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002366772067611424
+now it is 64900 steps  and the cls_loss is : tensor(0.2135, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023638916477316508
+now it is 64950 steps  and the cls_loss is : tensor(0.1494, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002361006453325065
+now it is 65000 steps  and the cls_loss is : tensor(0.2709, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023581165003377395
+now it is 65050 steps  and the cls_loss is : tensor(0.2287, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002355221804742043
+now it is 65100 steps  and the cls_loss is : tensor(0.1761, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002352322382536559
+now it is 65150 steps  and the cls_loss is : tensor(0.1457, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023494182497459932
+now it is 65200 steps  and the cls_loss is : tensor(0.0721, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002346509422421087
+now it is 65250 steps  and the cls_loss is : tensor(0.2318, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023435959166385263
+now it is 65300 steps  and the cls_loss is : tensor(0.1557, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023406777485008557
+now it is 65350 steps  and the cls_loss is : tensor(0.1437, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002337754934136387
+now it is 65400 steps  and the cls_loss is : tensor(0.2040, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002334827489699112
+now it is 65450 steps  and the cls_loss is : tensor(0.2196, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023318954313686106
+now it is 65500 steps  and the cls_loss is : tensor(0.1811, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023289587753499647
+now it is 65550 steps  and the cls_loss is : tensor(0.2080, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023260175378736667
+now it is 65600 steps  and the cls_loss is : tensor(0.1978, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023230717351955294
+now it is 65650 steps  and the cls_loss is : tensor(0.1013, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002320121383596597
+now it is 65700 steps  and the cls_loss is : tensor(0.1794, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023171664993830556
+now it is 65750 steps  and the cls_loss is : tensor(0.1026, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002314207098886142
+now it is 65800 steps  and the cls_loss is : tensor(0.1602, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0023112431984620534
+now it is 65850 steps  and the cls_loss is : tensor(0.1891, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002308274814491859
+now it is 65900 steps  and the cls_loss is : tensor(0.1707, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002305301963381406
+now it is 65950 steps  and the cls_loss is : tensor(0.1688, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002302324661561232
+now it is 66000 steps  and the cls_loss is : tensor(0.1443, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022993429254864724
+now it is 66050 steps  and the cls_loss is : tensor(0.1584, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002296356771636772
+now it is 66100 steps  and the cls_loss is : tensor(0.1659, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002293366216516189
+now it is 66150 steps  and the cls_loss is : tensor(0.1394, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022903712766531095
+now it is 66200 steps  and the cls_loss is : tensor(0.0991, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022873719686001513
+now it is 66250 steps  and the cls_loss is : tensor(0.2101, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022843683089340764
+now it is 66300 steps  and the cls_loss is : tensor(0.1706, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022813603142556966
+now it is 66350 steps  and the cls_loss is : tensor(0.1485, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002278348001189783
+now it is 66400 steps  and the cls_loss is : tensor(0.1083, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.0022753313863849733
+now it is 66450 steps  and the cls_loss is : tensor(0.1555, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002272310486513682
+now it is 66500 steps  and the cls_loss is : tensor(0.1389, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  0.002269285318272004
+now it is 66550 steps  and the cls_loss is : tensor(0.1646, device='cuda:0', grad_fn=<DivBackward0>) learning_rate:  

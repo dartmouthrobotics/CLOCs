@@ -110,3 +110,6 @@ venv.bak/
 # pretrained stuff
 /model_dir/
 /d2_detection_data
+/data/
+/data/kitti-orig/gt_database/
+*tckpt

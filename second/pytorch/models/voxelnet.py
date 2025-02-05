@@ -406,6 +406,7 @@ class VoxelNet(nn.Module):
         t = time.time()
         batch_size = example['anchors'].shape[0]
         batch_anchors = example["anchors"].view(batch_size, -1, 7)
+        print("TEST {}".format(batch_anchors.shape))
         batch_anchors_reshape = batch_anchors.reshape(1,200,176,14)
         batch_rect = example["rect"]
         batch_Trv2c = example["Trv2c"]

@@ -22,7 +22,7 @@ from second.pytorch.builder import (box_coder_builder, input_reader_builder,
 from second.utils.eval import get_coco_eval_result, get_official_eval_result,bev_box_overlap,d3_box_overlap
 from second.utils.progress_bar import ProgressBar
 from second.pytorch.core import box_torch_ops
-from second.pytorch.core.losses import SigmoidFocalClassificationLoss
+from second.pytorch.core.losses import SigmoidFocalClassificationLoss, WeightedL2LocalizationLoss
 from second.pytorch.models import fusion
 
 
@@ -34,8 +34,28 @@ def example_convert_to_torch(example, dtype=torch.float32,
         "voxels", "anchors", "reg_targets", "reg_weights", "bev_map", "rect",
         "Trv2c", "P2", "d3_gt_boxes","gt_2d_boxes"
     ]
+    # print(example["voxels"].shape)
 
+    count = 0
     for k, v in example.items():
+        """
+        #AQL
+        #print("BATCH AQL {}".format(batch))
+        count += 1
+        #print(batch["voxel_coords"])
+        #print("{}".format((count, batch["frame_id"], batch["points"].shape, batch["voxel_num_points"].shape, batch["voxels"].shape, batch["voxel_coords"].shape)))
+        #if batch["voxel_num_points"].shape[0] < 2:
+        #if count == 3 or count == 4:
+        unique, counts = np.unique(example["voxel_coords"][:,0], return_counts=True)
+        print("FRAME ID AQL {}".format((example["frame_id"], discard_count, count)))
+        if counts == [] or len(counts) < example["batch_size"] or np.any(counts < 2):
+          #"010284" in batch["frame_id"] or
+          #  "010472" in batch["frame_id"] or \
+          # "007785" in batch["frame_id"] or "003573" in batch["frame_id"]:
+            discard_count += 1
+            break
+        """
+
         if k in float_names:
             example_torch[k] = torch.tensor(v, dtype=torch.float32, device=device).to(dtype)
         elif k in ["coordinates", "labels", "num_points"]:
@@ -87,6 +107,7 @@ def build_inference_net(config_path,
     if ckpt_path is None:
         print("load existing model")
         torchplus.train.try_restore_latest_checkpoints(model_dir, [net])
+        print("loading the existing model completed.") # MJ
     else:
         torchplus.train.restore(ckpt_path, net)
     batch_size = batch_size or input_cfg.batch_size
@@ -193,7 +214,8 @@ def train(config_path,
     ######################
     # TRAINING
     ######################
-    focal_loss = SigmoidFocalClassificationLoss()
+    # focal_loss = SigmoidFocalClassificationLoss()
+    focal_loss = WeightedL2LocalizationLoss() # MJ
     cls_loss_sum = 0
     training_detail = []
     log_path = model_dir / 'log.txt'
@@ -353,9 +375,9 @@ def train(config_path,
             print(result, file=logf)
             print(result)
             writer.add_text('eval_result', json.dumps(result, indent=2), global_step)
-            result = get_coco_eval_result(gt_annos, dt_annos, class_names)
-            print(result, file=logf)
-            print(result)
+            #result = get_coco_eval_result(gt_annos, dt_annos, class_names)
+            #print(result, file=logf)
+            #print(result)
             if pickle_result:
                 with open(result_path_step / "result.pkl", 'wb') as f:
                     pickle.dump(dt_annos, f)
@@ -454,7 +476,8 @@ def predict_kitti_to_anno(net,
                           center_limit_range=None,
                           lidar_input=False,
                           global_set=None):
-    focal_loss_val = SigmoidFocalClassificationLoss()
+    # focal_loss_val = SigmoidFocalClassificationLoss()
+    focal_loss_val = WeightedL2LocalizationLoss() # MJ
     batch_image_shape = example['image_shape']
     batch_imgidx = example['image_idx']
     all_3d_output_camera_dict, all_3d_output, top_predictions, fusion_input,torch_index = net(example,detection_2d_path)
@@ -686,13 +709,14 @@ def evaluate(config_path,
         print(f"avg {name} time = {val * 1000:.3f} ms")
     if not predict_test:
         gt_annos = [info["annos"] for info in eval_dataset.dataset.kitti_infos]
+        # print("gt_annos {} and shape {}".format(gt_annos, len(gt_annos)))
         if not pickle_result:
             dt_annos = kitti.get_label_annos(result_path_step)
         result = get_official_eval_result(gt_annos, dt_annos, class_names)
         # print(json.dumps(result, indent=2))
         print(result)
-        result = get_coco_eval_result(gt_annos, dt_annos, class_names)
-        print(result)
+        #result = get_coco_eval_result(gt_annos, dt_annos, class_names)
+        #print(result)
         if pickle_result:
             with open(result_path_step / "result.pkl", 'wb') as f:
                 pickle.dump(dt_annos, f)
@@ -868,7 +892,9 @@ def predict_v2(net,example, preds_dict):
             if net._use_direction_classifier:
                 dir_labels = selected_dir_labels
                 #print("dir_labels shape is:",dir_labels.shape,"the values are: ",dir_labels)
-                opp_labels = (box_preds[..., -1] > 0) ^ dir_labels.byte()
+                # opp_labels = (box_preds[..., -1] > 0) ^ dir_labels.byte()
+                opp_labels = (box_preds[..., -1] > 0) ^ dir_labels.to(torch.bool) # MJ
+
                 box_preds[..., -1] += torch.where(
                     opp_labels,
                     torch.tensor(np.pi).type_as(box_preds),
